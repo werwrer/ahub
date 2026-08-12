@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "ahub": {
+      "command": "node",
+      "args": ["server/ahub-mcp.mjs"],
+      "cwd": "."
+    }
+  }
+}

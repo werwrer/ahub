@@ -1,0 +1,15 @@
+{
+  "name": "ahub",
+  "owner": {
+    "name": "ahub"
+  },
+  "description": "Agent and model configuration for Claude Code and Codex.",
+  "plugins": [
+    {
+      "name": "ahub",
+      "source": "./plugins/ahub",
+      "description": "Configure and coordinate coding agents without memorizing commands.",
+      "version": "0.3.0"
+    }
+  ]
+}

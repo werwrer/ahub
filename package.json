@@ -1,0 +1,50 @@
+{
+  "name": "@haruw/ahub",
+  "version": "0.3.0",
+  "description": "Use DeepSeek and other models with host-selected Codex and Claude Code context",
+  "type": "module",
+  "bin": {
+    "ahub": "bin/ahub.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "plugins",
+    ".agents/plugins/marketplace.json",
+    ".claude-plugin/marketplace.json",
+    "README.md",
+    "README.zh-CN.md"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check bin/ahub.mjs && node --test",
+    "smoke": "node bin/ahub.mjs demo"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "codex",
+    "claude-code",
+    "agent",
+    "multi-agent",
+    "ai"
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/werwrer/ahub#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/werwrer/ahub.git"
+  },
+  "bugs": {
+    "url": "https://github.com/werwrer/ahub/issues"
+  },
+  "dependencies": {
+    "chalk": "^5.6.2",
+    "inquirer": "^12.11.1",
+    "ora": "^8.2.0"
+  }
+}

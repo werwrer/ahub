@@ -1,0 +1,20 @@
+{
+  "name": "ahub",
+  "interface": {
+    "displayName": "ahub"
+  },
+  "plugins": [
+    {
+      "name": "ahub",
+      "source": {
+        "source": "local",
+        "path": "./plugins/ahub"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

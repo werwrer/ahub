@@ -1,0 +1,693 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
+import { main } from "../src/cli.mjs";
+import { loadState } from "../src/store.mjs";
+
+test("offline CLI workflow persists a context handoff", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agenthub-cli-"));
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await main(["init"], { root });
+    await main(["session", "create", "auth"], { root });
+    await main(["task", "add", "auth", "Fix", "refresh"], { root });
+    await main(["run", "mock", "auth", "Analyze", "race", "--context", "task"], { root });
+    await main(["run", "mock", "auth", "Implement", "analysis", "--context", "summary"], { root });
+    let state = await loadState(root);
+    const session = state.sessions[0];
+    assert.equal(session.runs.length, 2);
+    assert.deepEqual(session.runs[1].context.previousRunIds, [session.runs[0].id]);
+    await main(["task", "done", "auth", session.tasks[0].id.slice(0, 8)], { root });
+    state = await loadState(root);
+    assert.equal(state.sessions[0].tasks[0].status, "done");
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("simple setup and ask create a default session using agent configuration", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-simple-"));
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await main(["setup"], { root });
+    const configPath = join(root, ".ahub", "config.json");
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    config.agents.coder.runtime = "mock";
+    config.agents.coder.model = "test-model";
+    await writeFile(configPath, JSON.stringify(config));
+    await main(["ask", "coder", "implement", "the", "feature"], { root });
+    const state = await loadState(root);
+    assert.equal(state.sessions[0].name, "main");
+    assert.equal(state.sessions[0].runs[0].agent, "coder");
+    assert.equal(state.sessions[0].runs[0].runtime, "mock");
+    assert.equal(state.sessions[0].runs[0].model, "test-model");
+    assert.match(state.sessions[0].runs[0].task, /Implement the requested change/);
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("custom slash commands select a configured model profile", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-command-"));
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await main(["setup"], { root });
+    const configPath = join(root, ".ahub", "config.json");
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    config.profiles.cheap = { runtime: "mock", provider: "deepseek", model: "deepseek-v4-flash" };
+    await writeFile(configPath, JSON.stringify(config));
+    await main(["command", "set", "/省点", "cheap"], { root });
+    await main(["ask", "coder", "/省点", "fix", "lint"], { root });
+    const state = await loadState(root);
+    const run = state.sessions[0].runs[0];
+    assert.equal(run.runtime, "mock");
+    assert.equal(run.provider, "deepseek");
+    assert.equal(run.model, "deepseek-v4-flash");
+    assert.doesNotMatch(run.task, /省点/);
+    assert.match(run.task, /fix lint/);
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("custom host shortcut presets persist model, context, and role together", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-shortcut-"));
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await main(["setup"], { root });
+    await main(["shortcut", "set", "/省钱审查", "--model", "ds4f", "--context", "related", "--role", "reviewer"], { root });
+    const config = JSON.parse(await readFile(join(root, ".ahub", "config.json"), "utf8"));
+    assert.deepEqual(config.shortcuts["/省钱审查"], { model: "ds4f", contextMode: "related", role: "reviewer" });
+    await main(["shortcut", "remove", "/省钱审查"], { root });
+    const updated = JSON.parse(await readFile(join(root, ".ahub", "config.json"), "utf8"));
+    assert.equal(updated.shortcuts["/省钱审查"], undefined);
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("model and terminal CLI directives compose independently", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-compose-"));
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await main(["setup"], { root });
+    const configPath = join(root, ".ahub", "config.json");
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    config.commands["/testcli"] = "cli:mock";
+    config.models.ds4f = { provider: "test-provider", model: "deepseek-v4-flash" };
+    await writeFile(configPath, JSON.stringify(config));
+    await main(["ask", "coder", "/ds4f", "/testcli", "fix", "tests"], { root });
+    const run = (await loadState(root)).sessions[0].runs[0];
+    assert.equal(run.runtime, "mock");
+    assert.equal(run.provider, "test-provider");
+    assert.equal(run.model, "deepseek-v4-flash");
+    assert.doesNotMatch(run.task, /ds4f|testcli/);
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("agent can inherit its terminal CLI model or use a persistent alias", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-model-"));
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await main(["setup"], { root });
+    const configPath = join(root, ".ahub", "config.json");
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    config.runtimes.mock = {};
+    config.agents.coder.cli = "mock";
+    delete config.agents.coder.runtime;
+    await writeFile(configPath, JSON.stringify(config));
+    await main(["agent", "set", "coder", "model", "inherit"], { root });
+    await main(["ask", "coder", "first"], { root });
+    await main(["model", "set", "localfast", "my-fast-model"], { root });
+    await main(["agent", "set", "coder", "model", "localfast"], { root });
+    await main(["ask", "coder", "second"], { root });
+    const runs = (await loadState(root)).sessions[0].runs;
+    assert.equal(runs[0].model, undefined);
+    assert.equal(runs[1].model, "my-fast-model");
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("one request can choose a CLI and model in structured form without changing defaults", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-once-"));
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await main(["setup"], { root });
+    const configPath = join(root, ".ahub", "config.json");
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    config.runtimes.mock = {};
+    config.agents.coder.cli = "mock";
+    config.agents.coder.model = "persistent-model";
+    await writeFile(configPath, JSON.stringify(config));
+    await main(["ask", "coder", "fix", "tests", "--cli", "mock", "--model", "inherit"], { root });
+    await main(["ask", "coder", "fix", "lint", "--cli", "mock", "--model", "one-shot-model"], { root });
+    const runs = (await loadState(root)).sessions[0].runs;
+    assert.equal(runs[0].runtime, "mock");
+    assert.equal(runs[0].model, undefined);
+    assert.equal(runs[1].model, "one-shot-model");
+    assert.doesNotMatch(runs[1].task, /--cli|--model|one-shot-model/);
+    const saved = JSON.parse(await readFile(configPath, "utf8"));
+    assert.equal(saved.agents.coder.model, "persistent-model");
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("explicit inherit clears model and provider selected by a profile", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-inherit-"));
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await main(["setup"], { root });
+    const configPath = join(root, ".ahub", "config.json");
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    config.runtimes.mock = {};
+    config.profiles.cheap = { runtime: "mock", provider: "deepseek", model: "deepseek-v4-flash" };
+    await writeFile(configPath, JSON.stringify(config));
+    await main(["ask", "coder", "/cheap", "fix", "tests", "--model", "inherit"], { root });
+    const run = (await loadState(root)).sessions[0].runs[0];
+    assert.equal(run.runtime, "mock");
+    assert.equal(run.model, undefined);
+    assert.equal(run.provider, undefined);
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Codex plugin installer registers the packaged marketplace and public selector", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-install-project-"));
+  const fakeBin = await mkdtemp(join(tmpdir(), "ahub-install-bin-"));
+  const calls = join(fakeBin, "calls.txt");
+  const codex = join(fakeBin, "codex");
+  const previousPath = process.env.PATH;
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await writeFile(codex, `#!/bin/sh\nprintf '%s\\n' "$*" >> "${calls}"\nif [ "$*" = "plugin list --json" ]; then printf '{"installed":[]}\\n'; fi\n`);
+    await chmod(codex, 0o755);
+    process.env.PATH = `${fakeBin}${delimiter}${previousPath}`;
+    await main(["install", "codex"], { root });
+    const invocations = await readFile(calls, "utf8");
+    assert.match(invocations, /plugin marketplace add .*Agent-Hub/u);
+    assert.match(invocations, /plugin add ahub@ahub/u);
+  } finally {
+    console.log = log;
+    process.env.PATH = previousPath;
+    await rm(root, { recursive: true, force: true });
+    await rm(fakeBin, { recursive: true, force: true });
+  }
+});
+
+test("Codex installer removes the legacy ahub-local conflict", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-install-migrate-"));
+  const fakeBin = await mkdtemp(join(tmpdir(), "ahub-install-migrate-bin-"));
+  const calls = join(fakeBin, "calls.txt");
+  const codex = join(fakeBin, "codex");
+  const previousPath = process.env.PATH;
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await writeFile(codex, `#!/bin/sh\nprintf '%s\\n' "$*" >> "${calls}"\nif [ "$*" = "plugin list --json" ]; then printf '{"installed":[{"pluginId":"ahub@ahub-local"}]}\\n'; fi\n`);
+    await chmod(codex, 0o755);
+    process.env.PATH = `${fakeBin}${delimiter}${previousPath}`;
+    await main(["install", "codex"], { root });
+    const invocations = await readFile(calls, "utf8");
+    assert.match(invocations, /plugin remove ahub@ahub-local/u);
+  } finally {
+    console.log = log;
+    process.env.PATH = previousPath;
+    await rm(root, { recursive: true, force: true });
+    await rm(fakeBin, { recursive: true, force: true });
+  }
+});
+
+test("Claude plugin installer registers the marketplace and installs ahub", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-claude-install-project-"));
+  const fakeBin = await mkdtemp(join(tmpdir(), "ahub-claude-install-bin-"));
+  const calls = join(fakeBin, "calls.txt");
+  const claude = join(fakeBin, "claude");
+  const previousPath = process.env.PATH;
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await writeFile(claude, `#!/bin/sh\nprintf '%s\\n' "$*" >> "${calls}"\nif [ "$*" = "plugin list --json" ]; then printf '[]\\n'; fi\n`);
+    await chmod(claude, 0o755);
+    process.env.PATH = `${fakeBin}${delimiter}${previousPath}`;
+    await main(["install", "claude"], { root });
+    const invocations = await readFile(calls, "utf8");
+    assert.match(invocations, /plugin marketplace add .*Agent-Hub/u);
+    assert.match(invocations, /plugin install ahub@ahub --scope user/u);
+  } finally {
+    console.log = log;
+    process.env.PATH = previousPath;
+    await rm(root, { recursive: true, force: true });
+    await rm(fakeBin, { recursive: true, force: true });
+  }
+});
+
+test("Claude plugin refresh removes an installed copy before reinstalling", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-claude-refresh-project-"));
+  const fakeBin = await mkdtemp(join(tmpdir(), "ahub-claude-refresh-bin-"));
+  const calls = join(fakeBin, "calls.txt");
+  const claude = join(fakeBin, "claude");
+  const previousPath = process.env.PATH;
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await writeFile(claude, `#!/bin/sh\nprintf '%s\\n' "$*" >> "${calls}"\nif [ "$*" = "plugin list --json" ]; then printf '[{"id":"ahub@ahub"}]\\n'; fi\n`);
+    await chmod(claude, 0o755);
+    process.env.PATH = `${fakeBin}${delimiter}${previousPath}`;
+    await main(["install", "claude"], { root });
+    const invocations = await readFile(calls, "utf8");
+    assert.match(invocations, /plugin uninstall ahub@ahub --scope user/u);
+    assert.match(invocations, /plugin install ahub@ahub --scope user/u);
+  } finally {
+    console.log = log;
+    process.env.PATH = previousPath;
+    await rm(root, { recursive: true, force: true });
+    await rm(fakeBin, { recursive: true, force: true });
+  }
+});
+
+test("first setup uses the only installed CLI for every agent", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-single-cli-project-"));
+  const fakeBin = await mkdtemp(join(tmpdir(), "ahub-single-cli-bin-"));
+  const nodePath = process.execPath;
+  const claude = join(fakeBin, "claude");
+  const node = join(fakeBin, "node");
+  const previousPath = process.env.PATH;
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await writeFile(claude, "#!/bin/sh\nprintf 'claude test\\n'\n");
+    await writeFile(node, `#!/bin/sh\nexec "${nodePath}" "$@"\n`);
+    await chmod(claude, 0o755);
+    await chmod(node, 0o755);
+    process.env.PATH = fakeBin;
+    await main(["setup"], { root });
+    const config = JSON.parse(await readFile(join(root, ".ahub", "config.json"), "utf8"));
+    for (const agent of Object.values(config.agents)) {
+      assert.equal(agent.cli, "claude");
+      assert.equal(agent.model, "inherit");
+    }
+  } finally {
+    console.log = log;
+    process.env.PATH = previousPath;
+    await rm(root, { recursive: true, force: true });
+    await rm(fakeBin, { recursive: true, force: true });
+  }
+});
+
+test("model configuration rejects providers that are not implemented", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-provider-"));
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await main(["init"], { root });
+    await assert.rejects(
+      () => main(["model", "set", "fast", "model-x", "--provider", "unknown"], { root }),
+      /unsupported provider/u,
+    );
+    const config = JSON.parse(await readFile(join(root, ".ahub", "config.json"), "utf8"));
+    assert.equal(config.models.fast, undefined);
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("missing option values fail clearly instead of using persistent defaults", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-flags-"));
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await main(["init"], { root });
+    await assert.rejects(() => main(["ask", "coder", "fix", "tests", "--model"], { root }), /--model requires a value/u);
+    await assert.rejects(() => main(["ask", "coder", "fix", "tests", "--cli"], { root }), /--cli requires a value/u);
+    await assert.rejects(() => main(["model", "set", "fast", "model-x", "--provider"], { root }), /--provider requires a value/u);
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("task text keeps application flags that do not belong to ahub", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-task-flags-"));
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await main(["init"], { root });
+    const configPath = join(root, ".ahub", "config.json");
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    config.runtimes.mock = {};
+    config.agents.coder.cli = "mock";
+    await writeFile(configPath, JSON.stringify(config));
+    await main(["ask", "coder", "fix", "the", "--watch", "and", "--dry-run", "flags"], { root });
+    const task = (await loadState(root)).sessions[0].runs[0].task;
+    assert.match(task, /--watch and --dry-run flags/u);
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("double dash protects ahub-looking flags inside task text", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-separator-"));
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await main(["init"], { root });
+    const configPath = join(root, ".ahub", "config.json");
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    config.runtimes.mock = {};
+    config.agents.coder.cli = "mock";
+    await writeFile(configPath, JSON.stringify(config));
+    await main(["ask", "coder", "--cli", "mock", "--model", "inherit", "--", "fix", "the", "--model", "parser"], { root });
+    const run = (await loadState(root)).sessions[0].runs[0];
+    assert.equal(run.model, undefined);
+    assert.match(run.task, /fix the --model parser/u);
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("agent model configuration rejects a misspelled alias", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-alias-"));
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await main(["init"], { root });
+    await assert.rejects(() => main(["agent", "set", "coder", "model", "ds4ff"], { root }), /unknown model alias/u);
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("agent cannot persist a DeepSeek default before the provider is connected", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-agent-readiness-"));
+  const credentialHome = await mkdtemp(join(tmpdir(), "ahub-agent-readiness-home-"));
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await main(["init"], { root });
+    await assert.rejects(() => main(["agent", "set", "coder", "model", "ds4f"], { root, credentialHome }), /DeepSeek/u);
+    const config = JSON.parse(await readFile(join(root, ".ahub", "config.json"), "utf8"));
+    assert.notEqual(config.agents.coder.model, "ds4f");
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+    await rm(credentialHome, { recursive: true, force: true });
+  }
+});
+
+test("a missing DeepSeek connection fails before creating a run record", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-preflight-"));
+  const credentialHome = await mkdtemp(join(tmpdir(), "ahub-preflight-home-"));
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await main(["init"], { root });
+    await assert.rejects(() => main(["ask", "coder", "--model", "ds4f", "--", "calculate"], { root, credentialHome }), /DeepSeek/u);
+    const state = await loadState(root);
+    assert.equal(state.sessions[0].runs.length, 0);
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+    await rm(credentialHome, { recursive: true, force: true });
+  }
+});
+
+test("profiles cannot escalate a read-only agent to write access", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-access-"));
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await main(["init"], { root });
+    const configPath = join(root, ".ahub", "config.json");
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    config.runtimes.mock = {};
+    config.agents.reviewer.cli = "mock";
+    config.profiles.unsafe = { runtime: "mock", permissionMode: "acceptEdits", sandbox: "danger-full-access" };
+    config.commands["/unsafe"] = "profile:unsafe";
+    await writeFile(configPath, JSON.stringify(config));
+    await main(["ask", "reviewer", "/unsafe", "review"], { root });
+    const run = (await loadState(root)).sessions[0].runs[0];
+    assert.equal(run.runtime, "mock");
+    assert.equal(run.status, "completed");
+    assert.equal(run.permissionMode, "plan");
+    assert.equal(run.sandbox, "read-only");
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("concurrent first asks share one default session without failing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-first-race-"));
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await main(["init"], { root });
+    const configPath = join(root, ".ahub", "config.json");
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    config.runtimes.mock = {};
+    config.agents.coder.cli = "mock";
+    await writeFile(configPath, JSON.stringify(config));
+    await Promise.all(Array.from({ length: 8 }, (_, index) => main(["ask", "coder", `task-${index}`], { root })));
+    const state = await loadState(root);
+    assert.equal(state.sessions.length, 1);
+    assert.equal(state.sessions[0].name, "main");
+    assert.equal(state.sessions[0].runs.length, 8);
+    assert.ok(state.sessions[0].runs.every((run) => run.status === "completed"));
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("auth commands keep DeepSeek key out of config and state", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-auth-"));
+  const credentialHome = await mkdtemp(join(tmpdir(), "ahub-auth-home-"));
+  const log = console.log;
+  console.log = () => {};
+  try {
+    const credentialOptions = { credentialHome, validateCredential: async () => ({ ok: true }) };
+    await main(["auth", "set", "deepseek"], { root, ...credentialOptions, readSecret: async () => "project-secret-value" });
+    await main(["auth", "status"], { root, ...credentialOptions });
+    const config = await readFile(join(root, ".ahub", "config.json"), "utf8");
+    const state = await readFile(join(root, ".ahub", "state.json"), "utf8");
+    const ignores = await readFile(join(root, ".ahub", ".gitignore"), "utf8");
+    assert.doesNotMatch(config, /project-secret-value/u);
+    assert.doesNotMatch(state, /project-secret-value/u);
+    assert.match(ignores, /^secrets\.json$/mu);
+    await main(["auth", "remove", "deepseek"], { root, ...credentialOptions });
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+    await rm(credentialHome, { recursive: true, force: true });
+  }
+});
+
+test("a rejected DeepSeek key is never saved", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-invalid-auth-"));
+  const credentialHome = await mkdtemp(join(tmpdir(), "ahub-invalid-auth-home-"));
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await assert.rejects(() => main(["auth", "set", "deepseek"], {
+      root,
+      credentialHome,
+      readSecret: async () => "invalid-key",
+      validateCredential: async () => ({ ok: false, reason: "invalid-key" }),
+    }), /rejected|拒绝/u);
+    await assert.rejects(() => readFile(join(credentialHome, ".ahub", "credentials.json"), "utf8"), { code: "ENOENT" });
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+    await rm(credentialHome, { recursive: true, force: true });
+  }
+});
+
+test("stored provider credentials are redacted from model output and persisted state", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-redact-"));
+  const fakeBin = await mkdtemp(join(tmpdir(), "ahub-redact-bin-"));
+  const claude = join(fakeBin, "claude");
+  const previousPath = process.env.PATH;
+  const credentialHome = await mkdtemp(join(tmpdir(), "ahub-redact-home-"));
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await writeFile(claude, `#!/bin/sh\ncat >/dev/null\nprintf '{"result":"leaked %s"}\\n' "$ANTHROPIC_AUTH_TOKEN"\n`);
+    await chmod(claude, 0o755);
+    process.env.PATH = `${fakeBin}${delimiter}${previousPath}`;
+    const credentialOptions = { credentialHome, validateCredential: async () => ({ ok: true }) };
+    await main(["auth", "set", "deepseek"], { root, ...credentialOptions, readSecret: async () => "redact-this-secret" });
+    await main(["ask", "coder", "--cli", "claude", "--model", "ds4f", "--", "test redaction"], { root, ...credentialOptions });
+    const stateText = await readFile(join(root, ".ahub", "state.json"), "utf8");
+    assert.doesNotMatch(stateText, /redact-this-secret/u);
+    assert.match(stateText, /\[REDACTED\]/u);
+  } finally {
+    console.log = log;
+    process.env.PATH = previousPath;
+    await rm(root, { recursive: true, force: true });
+    await rm(fakeBin, { recursive: true, force: true });
+    await rm(credentialHome, { recursive: true, force: true });
+  }
+});
+
+test("terminal control center runs an agent through menu selections", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-menu-run-"));
+  const log = console.log;
+  console.log = () => {};
+  const selections = ["run", "coder", { cli: "mock", model: "inherit" }];
+  const prompts = {
+    select: async () => selections.shift(),
+    ask: async () => "menu task",
+  };
+  try {
+    await main(["init"], { root });
+    const configPath = join(root, ".ahub", "config.json");
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    config.runtimes.mock = {};
+    await writeFile(configPath, JSON.stringify(config));
+    await main([], { root, interactive: true, prompts });
+    const run = (await loadState(root)).sessions[0].runs[0];
+    assert.equal(run.runtime, "mock");
+    assert.equal(run.model, undefined);
+    assert.match(run.task, /menu task/u);
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("terminal config menu saves agent defaults without low-level commands", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-menu-config-"));
+  const credentialHome = await mkdtemp(join(tmpdir(), "ahub-menu-config-home-"));
+  const log = console.log;
+  console.log = () => {};
+  const selections = ["agent", "reviewer", "codex", "ds4f", "connect"];
+  const prompts = { select: async () => selections.shift(), ask: async () => "" };
+  try {
+    await main(["config"], { root, interactive: true, prompts, credentialHome, readSecret: async () => "valid-key", validateCredential: async () => ({ ok: true }) });
+    const config = JSON.parse(await readFile(join(root, ".ahub", "config.json"), "utf8"));
+    assert.equal(config.agents.reviewer.cli, "codex");
+    assert.equal(config.agents.reviewer.model, "ds4f");
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+    await rm(credentialHome, { recursive: true, force: true });
+  }
+});
+
+test("terminal model menu creates a reusable custom model", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-menu-model-"));
+  const log = console.log;
+  console.log = () => {};
+  const selections = ["models", "custom"];
+  const answers = ["fast", "provider-model-fast"];
+  const prompts = { select: async () => selections.shift(), ask: async () => answers.shift() };
+  try {
+    await main(["config"], { root, interactive: true, prompts });
+    const config = JSON.parse(await readFile(join(root, ".ahub", "config.json"), "utf8"));
+    assert.deepEqual(config.models.fast, { model: "provider-model-fast" });
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("terminal shortcut menu creates a reusable host-context preset", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-menu-shortcut-"));
+  const log = console.log;
+  console.log = () => {};
+  const selections = ["shortcuts", "create", "ds4f", "related", "reviewer"];
+  const prompts = { select: async () => selections.shift(), ask: async () => "省钱审查" };
+  try {
+    await main(["init"], { root });
+    await main([], { root, interactive: true, prompts });
+    const config = JSON.parse(await readFile(join(root, ".ahub", "config.json"), "utf8"));
+    assert.deepEqual(config.shortcuts["/省钱审查"], { model: "ds4f", contextMode: "related", role: "reviewer" });
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("running ahub with no command on a new project performs onboarding then opens the menu", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-first-menu-"));
+  const fakeBin = await mkdtemp(join(tmpdir(), "ahub-first-menu-bin-"));
+  const nodePath = process.execPath;
+  const claude = join(fakeBin, "claude");
+  const node = join(fakeBin, "node");
+  const previousPath = process.env.PATH;
+  const log = console.log;
+  console.log = () => {};
+  const selections = ["inherit", "exit"];
+  const prompts = { select: async () => selections.shift(), ask: async () => "" };
+  try {
+    await writeFile(claude, "#!/bin/sh\nprintf 'claude test\\n'\n");
+    await writeFile(node, `#!/bin/sh\nexec "${nodePath}" "$@"\n`);
+    await chmod(claude, 0o755);
+    await chmod(node, 0o755);
+    process.env.PATH = fakeBin;
+    await main([], { root, interactive: true, prompts });
+    const config = JSON.parse(await readFile(join(root, ".ahub", "config.json"), "utf8"));
+    assert.ok(Object.values(config.agents).every((agent) => agent.cli === "claude" && agent.model === "inherit"));
+  } finally {
+    console.log = log;
+    process.env.PATH = previousPath;
+    await rm(root, { recursive: true, force: true });
+    await rm(fakeBin, { recursive: true, force: true });
+  }
+});
+
+test("first interactive setup stores the selected interface language", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-language-project-"));
+  const fakeBin = await mkdtemp(join(tmpdir(), "ahub-language-bin-"));
+  const nodePath = process.execPath;
+  const claude = join(fakeBin, "claude");
+  const node = join(fakeBin, "node");
+  const previousPath = process.env.PATH;
+  const log = console.log;
+  console.log = () => {};
+  const selections = ["zh-CN", "inherit", "exit"];
+  const prompts = { interactive: true, select: async () => selections.shift(), confirm: async () => false, ask: async () => "" };
+  try {
+    await writeFile(claude, "#!/bin/sh\nprintf 'claude test\\n'\n");
+    await writeFile(node, `#!/bin/sh\nexec "${nodePath}" "$@"\n`);
+    await chmod(claude, 0o755);
+    await chmod(node, 0o755);
+    process.env.PATH = fakeBin;
+    await main([], { root, interactive: true, prompts, quietUi: true, loop: false });
+    const config = JSON.parse(await readFile(join(root, ".ahub", "config.json"), "utf8"));
+    assert.equal(config.ui.language, "zh-CN");
+  } finally {
+    console.log = log;
+    process.env.PATH = previousPath;
+    await rm(root, { recursive: true, force: true });
+    await rm(fakeBin, { recursive: true, force: true });
+  }
+});

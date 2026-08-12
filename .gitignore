@@ -1,0 +1,9 @@
+node_modules/
+.ahub/
+.agenthub/
+*.log
+.DS_Store
+*.tgz
+.env
+.env.*
+!.env.example
