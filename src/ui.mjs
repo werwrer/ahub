@@ -4,8 +4,21 @@ import ora from "ora";
 const width = 58;
 const line = "─".repeat(width);
 
+// Shared column width for aligned output (agents, providers, models).
+export const COL = 14;
+
 export function clearScreen() {
   if (process.stdout.isTTY) process.stdout.write("\x1b[2J\x1b[H");
+}
+
+// clack-style session framing (no dependency — just chalk).
+export function intro(title) {
+  console.log(chalk.cyan(`\n  ◆  ${chalk.bold(title)}`));
+  console.log(chalk.cyan("  │"));
+}
+export function outro(message = "") {
+  console.log(chalk.cyan("  │"));
+  console.log(chalk.cyan(`  └  ${chalk.dim(message)}`));
 }
 
 export function banner(version = "", tagline = "Your coding agents, one simple control center") {

@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import chalk from "chalk";
 import { DEFAULT_CONFIG, fallbackActiveModel, loadConfig, modelChoices, modelDetail, modelLabel, modelShort, resolveAgent, resolveConfiguredModel, resolveProfileCommand, saveConfig } from "./config.mjs";
 import { PROVIDER_CATALOG, catalogChoices, catalogEntry } from "./catalog.mjs";
 import { buildExportMarkdown, backupWorkspace, exportDelegations, writeBackupFile, writeExportFile } from "../plugins/ahub/server/ahub-mcp.mjs";
@@ -10,7 +11,7 @@ import { commandVersion, runRuntime } from "./runtimes.mjs";
 import { getProviderCredential, getProviderSecret, loadSecrets, readHidden, removeProviderSecret, setProviderSecret } from "./secrets.mjs";
 import { validateProviderCredential } from "./providers.mjs";
 import { createPrompts } from "./prompts.mjs";
-import { banner, clearScreen, hint, section, spinner, statusMark, success, warning } from "./ui.mjs";
+import { banner, clearScreen, COL, hint, intro, outro, section, spinner, statusMark, success, warning } from "./ui.mjs";
 import { inferLanguage, translator } from "./i18n.mjs";
 import { emptyState, exists, findSession, loadState, migrateLegacyState, mutate, paths, saveState } from "./store.mjs";
 
@@ -172,7 +173,7 @@ async function showConfig(root, config, t = translator(config.ui?.language ?? in
   console.log(`\n${t("agents")}`);
   for (const [name, agent] of Object.entries(config.agents)) {
     const model = agent.model ?? "inherit";
-    console.log(`  ${name.padEnd(11)} ${agent.cli ?? agent.runtime} · ${model}`);
+    console.log(`  ${name.padEnd(COL)} ${agent.cli ?? agent.runtime} · ${model}`);
   }
   console.log(`\n${t("models")}`);
   console.log(`  inherit     ${t("inheritRow")}`);
@@ -321,7 +322,7 @@ async function renderDashboard(root, config, t, options) {
   section(t("dashboardTitle"));
   console.log(`\n${t("agents")}`);
   for (const [name, agent] of Object.entries(config.agents)) {
-    console.log(`  ${name.padEnd(11)} ${(agent.cli ?? agent.runtime).padEnd(8)} ${agent.model ?? "inherit"}`);
+    console.log(`  ${name.padEnd(COL)} ${(agent.cli ?? agent.runtime).padEnd(8)} ${agent.model ?? "inherit"}`);
   }
   if (Object.keys(providers).length) {
     console.log(`\n${t("providersTitle")}`);
@@ -627,6 +628,12 @@ async function configureShortcuts(root, prompts, t) {
 async function controlCenter(root, options = {}) {
   const prompts = options.prompts ?? createPrompts();
   const repeat = options.loop ?? prompts.interactive === true;
+  if (!options.quietUi) {
+    const config = await loadConfig(root);
+    const t = translator(config.ui?.language ?? inferLanguage());
+    clearScreen();
+    intro(`${chalk.bold("ahub")} ${chalk.dim(`v0.7.1`)}  ${chalk.dim(root)}`);
+  }
   do {
     const config = await loadConfig(root);
     const t = translator(config.ui?.language ?? inferLanguage());
@@ -644,7 +651,7 @@ async function controlCenter(root, options = {}) {
       { name: t("language"), value: "language" },
       { name: t("exit"), value: "exit" },
     ]);
-    if (action === "exit") return;
+    if (action === "exit") { if (!options.quietUi) outro(); return; }
     try {
       if (action === "language") {
         const language = await chooseLanguage(root, prompts, true);
@@ -828,13 +835,6 @@ export async function main(argv, options = {}) {
   if (!command) {
     if (!interactive) return console.log(HELP);
     if (!(await exists(paths(root).state))) await main(["setup"], { ...options, root, interactive: true });
-    const config = await loadConfig(root);
-    const t = translator(config.ui?.language ?? inferLanguage());
-    if (!options.quietUi) {
-      clearScreen();
-      banner("0.7.1", t("tagline"));
-      hint(`${t("project")}  ${root}`);
-    }
     try {
       return await controlCenter(root, options);
     } catch (error) {
@@ -863,7 +863,7 @@ export async function main(argv, options = {}) {
     const cliReady = (cli) => cli === "claude" ? claude : cli === "codex" ? codex : true;
     for (const name of ["architect", "coder", "reviewer"]) {
       const cli = configuredCli(name);
-      console.log(`  ${name.padEnd(11)} ${cli}${cliReady(cli) ? " ✓" : " (CLI missing)"}`);
+      console.log(`  ${name.padEnd(COL)} ${cli}${cliReady(cli) ? " ✓" : " (CLI missing)"}`);
     }
     console.log("\nTry: ahub ask coder \"inspect this project\"");
     return;
@@ -937,7 +937,7 @@ export async function main(argv, options = {}) {
     const config = await loadConfig(root);
     console.log("Alias       Provider     Model ID");
     console.log(`${"inherit".padEnd(11)} ${"CLI config".padEnd(12)} (no override)`);
-    for (const [name, model] of Object.entries(config.models)) console.log(`${name.padEnd(11)} ${(model.provider ?? "CLI config").padEnd(12)} ${model.model}`);
+    for (const [name, model] of Object.entries(config.models)) console.log(`${name.padEnd(COL)} ${(model.provider ?? "CLI config").padEnd(12)} ${model.model}`);
     return;
   }
   if (command === "model" && subcommand === "set") {
@@ -1017,7 +1017,7 @@ export async function main(argv, options = {}) {
   if (command === "agent" && subcommand === "list") {
     const config = await loadConfig(root);
     console.log("Agent       CLI       Model       Access");
-    for (const [name, agent] of Object.entries(config.agents)) console.log(`${name.padEnd(11)} ${(agent.cli ?? agent.runtime).padEnd(9)} ${(agent.model ?? "inherit").padEnd(11)} ${agent.access ?? "default"}`);
+    for (const [name, agent] of Object.entries(config.agents)) console.log(`${name.padEnd(COL)} ${(agent.cli ?? agent.runtime).padEnd(9)} ${(agent.model ?? "inherit").padEnd(11)} ${agent.access ?? "default"}`);
     return;
   }
   if (command === "agent" && subcommand === "set") {
@@ -1104,7 +1104,7 @@ export async function main(argv, options = {}) {
     const providers = config.providers ?? {};
     if (!Object.keys(providers).length) { console.log("No providers registered."); return; }
     console.log("Name            Label             Base URL");
-    for (const [key, conf] of Object.entries(providers)) console.log(`${key.padEnd(15)} ${(conf.label ?? key).padEnd(17)} ${conf.baseUrl ?? ""}`);
+    for (const [key, conf] of Object.entries(providers)) console.log(`${key.padEnd(COL)} ${(conf.label ?? key).padEnd(16)} ${conf.baseUrl ?? ""}`);
     return;
   }
   if (command === "provider" && subcommand === "add") {

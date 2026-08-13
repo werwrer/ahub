@@ -84,7 +84,7 @@ export function createPrompts(input = process.stdin, output = process.stdout) {
   };
   const search = async (message, choices) => {
     const normalized = choices.map((choice) => ({ ...choice, name: choice.name ?? choice.label }));
-    if (!terminal || normalized.length <= 8) return select(message, normalized);
+    if (!terminal || normalized.length <= 4) return select(message, normalized);
     return guardBack(run({
       type: "search",
       name: "value",
