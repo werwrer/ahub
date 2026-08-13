@@ -188,28 +188,6 @@ async function pickModel(prompts, message, config, extra = [], options = {}) {
   return (prompts.search ?? prompts.select)(message, choices);
 }
 
-async function addModelToLibrary(root, config, prompts, t) {
-  const providerChoices = [
-    ...Object.entries(config.providers ?? {}).map(([key, conf]) => ({ name: `${conf.label ?? key} · ${t("directDelegation")}`, value: key })),
-    { name: t("hostProvider"), value: undefined },
-  ];
-  const provider = await prompts.select(t("modelSource"), providerChoices);
-  const alias = (await prompts.ask(t("modelAlias"), {
-    validate: (value) => { const s = (value ?? "").trim(); return (s && s !== "inherit" && /^[a-z0-9][a-z0-9_-]*$/iu.test(s)) ? true : t("aliasInvalid"); },
-  })).trim();
-  const modelId = (await prompts.ask(t("modelId"), {
-    validate: (value) => (value ?? "").trim() ? true : t("modelIdInvalid"),
-  })).trim();
-  // Scripted/non-interactive callers bypass inquirer's validate; keep a guard so they still fail fast.
-  if (!alias || alias === "inherit" || !/^[a-z0-9][a-z0-9_-]*$/iu.test(alias)) throw new Error(t("aliasInvalid"));
-  if (!modelId) throw new Error(t("modelIdInvalid"));
-  const displayName = (await prompts.ask(t("modelDisplayName"), { default: alias })).trim() || alias;
-  if (config.models[alias] && !await (prompts.confirm?.(t("replaceModel", { alias }), false) ?? false)) return;
-  config.models[alias] = { name: displayName, ...(provider ? { provider } : {}), model: modelId, favorite: false, enabled: true };
-  await saveConfig(root, config);
-  success(`${t("modelSaved")} ${alias} → ${displayName}`);
-}
-
 // When the active model is hidden or removed, fall back to another delegatable model so
 // @ahub /ds never points at a model that cannot run.
 function reassignActive(config, excludedAlias, t) {
@@ -327,19 +305,115 @@ async function configureProviders(root, prompts, t, options = {}) {
   } while (prompts.interactive);
 }
 
+// Compact state dashboard rendered above every control-center action, so the user sees
+// agents, provider readiness, and the active model at a glance instead of drilling into
+// "status" to find out.
+async function renderDashboard(root, config, t, options) {
+  const providers = config.providers ?? {};
+  const readiness = {};
+  await Promise.all(Object.keys(providers).map(async (key) => {
+    readiness[key] = Boolean(await getProviderSecret(root, key, options));
+  }));
+  section(t("dashboardTitle"), "");
+  console.log(`\n${t("agents")}`);
+  for (const [name, agent] of Object.entries(config.agents)) {
+    console.log(`  ${name.padEnd(11)} ${(agent.cli ?? agent.runtime).padEnd(8)} ${agent.model ?? "inherit"}`);
+  }
+  if (Object.keys(providers).length) {
+    console.log(`\n${t("providersTitle")}`);
+    for (const [key, conf] of Object.entries(providers)) {
+      console.log(`  ${(conf.label ?? key).padEnd(14)} ${readiness[key] ? t("connectedShort") : t("notConnectedShort")}`);
+    }
+  }
+  const active = config.models[config.defaults.activeModel];
+  console.log(`\n${t("activeModel")}  ${active ? modelLabel(config.defaults.activeModel, active, providers) : config.defaults.activeModel}\n`);
+}
+
+// Step 1 of the add-model wizard: where does the model run? Registered providers are listed
+// inline with their connection state; the catalog and custom paths register on the fly. After
+// picking a provider, the key is connected right here — one pass, no menu digging.
+async function chooseProviderSource(root, config, prompts, t, options) {
+  const providers = config.providers ?? {};
+  const readiness = {};
+  await Promise.all(Object.keys(providers).map(async (key) => {
+    readiness[key] = Boolean(await getProviderSecret(root, key, options));
+  }));
+  const source = await prompts.select(t("modelSource"), [
+    { name: t("sourceCatalog"), value: "catalog" },
+    { name: t("sourceCustom"), value: "custom" },
+    ...Object.entries(providers).map(([key, conf]) => ({ name: `${conf.label ?? key} · ${conf.baseUrl ?? ""} · ${readiness[key] ? t("connectedShort") : t("notConnectedShort")}`, value: key })),
+    { name: t("hostProvider"), value: undefined },
+  ]);
+  let providerName;
+  if (source === "catalog") {
+    const available = catalogChoices(new Set(Object.keys(providers)));
+    if (!available.length) throw new Error(t("allCatalogRegistered"));
+    const name = await prompts.select(t("chooseProvider"), available);
+    const preset = catalogEntry(name);
+    config.providers = { ...(config.providers ?? {}), [name]: { ...preset } };
+    await saveConfig(root, config);
+    success(t("providerAdded", { name, label: preset.label }));
+    providerName = name;
+  } else if (source === "custom") {
+    providerName = await addCustomProvider(root, config, prompts, t);
+    if (!providerName) return undefined;
+  } else {
+    providerName = source; // a registered provider, or undefined for the host CLI
+  }
+  if (providerName && !(await getProviderSecret(root, providerName, options))) {
+    const label = config.providers?.[providerName]?.label ?? providerName;
+    const connect = await prompts.confirm(t("connectProviderNow", { label }), true);
+    if (!connect) return providerName;
+    const connected = await connectProvider(root, providerName, prompts, t, options);
+    if (!connected) warning(t("providerNotConnected", { label }));
+  }
+  return providerName;
+}
+
+// One-pass add-model wizard: provider source → key → model identity → wrap-up
+// (set active / assign an agent). Replaces the old multi-menu drill-down.
+async function setupModelFlow(root, prompts, t, options = {}) {
+  const config = await loadConfig(root);
+  section(t("addModelWizard"), t("addModelWizardSub"));
+  const providerName = await chooseProviderSource(root, config, prompts, t, options);
+  const alias = (await prompts.ask(t("modelAlias"), {
+    validate: (value) => { const s = (value ?? "").trim(); return (s && s !== "inherit" && /^[a-z0-9][a-z0-9_-]*$/iu.test(s)) ? true : t("aliasInvalid"); },
+  })).trim();
+  const modelId = (await prompts.ask(t("modelId"), {
+    validate: (value) => (value ?? "").trim() ? true : t("modelIdInvalid"),
+  })).trim();
+  if (!alias || alias === "inherit" || !/^[a-z0-9][a-z0-9_-]*$/iu.test(alias)) throw new Error(t("aliasInvalid"));
+  if (!modelId) throw new Error(t("modelIdInvalid"));
+  const displayName = (await prompts.ask(t("modelDisplayName"), { default: alias })).trim() || alias;
+  if (config.models[alias] && !await (prompts.confirm?.(t("replaceModel", { alias }), false) ?? false)) return;
+  config.models[alias] = { name: displayName, ...(providerName ? { provider: providerName } : {}), model: modelId, favorite: false, enabled: true };
+  if (providerName && (prompts.confirm?.(t("setActiveNow", { alias }), true) ?? true)) {
+    config.defaults.activeModel = alias;
+    config.defaults.externalModel = alias;
+  }
+  if (await (prompts.confirm?.(t("assignAgentNow", { alias }), false) ?? false)) {
+    const agentName = await prompts.select(t("whichAgent"), Object.keys(config.agents).map((name) => ({ label: t(name) !== name ? t(name) : name, value: name })));
+    config.agents[agentName].model = alias;
+  }
+  await saveConfig(root, config);
+  success(`${t("modelSaved")} ${alias} → ${displayName}`);
+  hint(providerName ? t("modelDoneHint") : t("assignHintModel"));
+  return alias;
+}
+
 async function configureModels(root, prompts, t, options = {}) {
   const config = await loadConfig(root);
   const action = await prompts.select(t("modelLibrary"), [
-    { name: t("browseModels"), value: "browse" },
-    { name: t("addModel"), value: "add" },
+    { name: t("addModelAction"), value: "add" },
     { name: t("manageModel"), value: "manage" },
+    { name: t("browseModels"), value: "browse" },
     { name: t("providerConnections"), value: "providers" },
     { name: t("setActiveModel"), value: "active" },
     { name: t("back"), value: "back" },
   ]);
   if (action === "back") return;
   if (action === "browse") return showConfig(root, config, t, options);
-  if (action === "add") return addModelToLibrary(root, config, prompts, t);
+  if (action === "add") return setupModelFlow(root, prompts, t, options);
   if (action === "manage") return manageModelLibrary(root, config, prompts, t);
   if (action === "providers") return configureProviders(root, prompts, t, options);
   if (action === "active") {
@@ -540,7 +614,9 @@ async function controlCenter(root, options = {}) {
   do {
     const config = await loadConfig(root);
     const t = translator(config.ui?.language ?? inferLanguage());
+    await renderDashboard(root, config, t, options);
     const action = await prompts.select(t("controlCenter"), [
+      { name: t("addModelAction"), value: "addModel" },
       { name: t("runAgent"), value: "run" },
       { name: t("agentSettings"), value: "agents" },
       { name: t("modelSettings"), value: "models" },
@@ -557,6 +633,7 @@ async function controlCenter(root, options = {}) {
         success(translator(language)("languageSaved"));
         continue;
       }
+      if (action === "addModel") await setupModelFlow(root, prompts, t, options);
       if (action === "agents") await configure(root, { ...options, prompts, initialAction: "agent" });
       if (action === "models") await configure(root, { ...options, prompts, initialAction: "models" });
       if (action === "shortcuts") await configureShortcuts(root, prompts, t);
@@ -617,7 +694,7 @@ async function onboarding(root, config, available, options = {}) {
   const t = translator(language);
   if (!options.quietUi) {
     clearScreen();
-    banner("0.6.0", t("tagline"));
+    banner("0.6.1", t("tagline"));
     section(t("quick1"), t("quick1Sub"));
   }
   const choices = [];
@@ -736,7 +813,7 @@ export async function main(argv, options = {}) {
     const t = translator(config.ui?.language ?? inferLanguage());
     if (!options.quietUi) {
       clearScreen();
-      banner("0.6.0", t("tagline"));
+      banner("0.6.1", t("tagline"));
       hint(`${t("project")}  ${root}`);
     }
     return controlCenter(root, options);

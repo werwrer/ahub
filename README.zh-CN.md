@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-当前版本：**0.6.0**
+当前版本：**0.6.1**
 
 在 Codex 或 Claude Code 里使用 DeepSeek 及其它模型，不丢失当前对话的上下文。
 
@@ -86,13 +86,26 @@ ahub
 ```
 
 ```text
+当前项目
+  智能体           终端     模型
+  architect       claude   inherit
+  coder           codex    ds4f
+  reviewer        claude   inherit
+
+  Provider        状态
+  DeepSeek        ● 已连接
+
+  当前模型  DeepSeek V4 Flash (ds4f) · $0.14/M
+
 ? 控制中心
-❯ ▶  运行智能体       启动 architect、coder 或 reviewer
-  ⚙  智能体设置       选择默认终端和模型
-  ◇  模型库             搜索、收藏和管理所有模型
-  ⌁  快捷预设           组合模型、上下文和智能体角色
-  ＋ 安装集成           添加到 Claude Code 或 Codex
-  ●  状态与诊断       检查配置和安装状态
+❯ ＋ 添加模型 / Provider  一步向导：供应商 → 模型 → key → 收尾
+  ▶  运行智能体          启动 architect、coder 或 reviewer
+  ⚙  智能体设置          选择默认终端和模型
+  ◇  模型库              搜索、收藏和管理所有模型
+  ⌁  快捷预设            组合模型、上下文和智能体角色
+  ＋ 安装集成            添加到 Claude Code 或 Codex
+  ●  状态与诊断          检查配置和安装状态
+  文  语言 / Language    切换中文或 English
   ×  退出
 ```
 

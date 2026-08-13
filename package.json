@@ -1,6 +1,6 @@
 {
   "name": "@haruw/ahub",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Use DeepSeek and other models with host-selected Codex and Claude Code context",
   "type": "module",
   "bin": {

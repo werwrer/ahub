@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.1 — 2026-08-13
+
+- **Terminal-native interaction redesign**: the control center now renders a live status dashboard (agents, provider readiness, active model) above every action, and adding a model is a **one-pass wizard** — pick the provider (catalog / custom / registered providers listed inline with ●/○ connection state / host CLI), fill the key if needed, name the model, then optionally set it active and assign an agent. Replaces the old six-level menu drill-down.
+
 ## 0.6.0 — 2026-08-13
 
 - **Provider catalog**: adding a provider is now pick-a-provider instead of type-a-provider. Well-known OpenAI-compatible providers (OpenAI, Anthropic, Moonshot Kimi, Zhipu GLM, Qwen/DashScope, SiliconFlow, Groq, Mistral, OpenRouter, xAI, Together, Fireworks, Novita, Ollama) ship with their default base URL and response format pre-filled — `ahub provider add openai` registers one and only the API key is needed afterwards (`ahub provider catalog` lists them; the menu offers the same picker with an immediate connect prompt). Custom endpoints still work via `ahub provider add <name> <baseUrl>`.

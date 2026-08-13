@@ -9,7 +9,7 @@
       "name": "ahub",
       "source": "./plugins/ahub",
       "description": "Configure and coordinate coding agents without memorizing commands.",
-      "version": "0.6.0"
+      "version": "0.6.1"
     }
   ]
 }

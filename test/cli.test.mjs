@@ -989,3 +989,42 @@ test("menu adds a catalog provider with just a key (no manual base URL)", async 
     await rm(credentialHome, { recursive: true, force: true });
   }
 });
+
+test("add-model wizard does provider → key → model → active/assign in one pass", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-wizard-"));
+  const credentialHome = await mkdtemp(join(tmpdir(), "ahub-wizard-home-"));
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await main(["init"], { root });
+    // controlCenter: addModel → source=catalog → pick openai → connect(yes) → alias/id/name
+    // → set active (yes) → assign to agent (yes) → pick coder → back to menu → exit
+    const selections = ["addModel", "catalog", "openai", "coder", "exit"];
+    const answers = ["gptmini", "gpt-4o-mini", "GPT Mini"];
+    const prompts = {
+      select: async () => selections.shift(),
+      ask: async () => answers.shift(),
+      confirm: async () => true,
+      interactive: true,
+    };
+    await main([], {
+      root,
+      interactive: true,
+      prompts,
+      credentialHome,
+      readSecret: async () => "wizard-key",
+      validateCredential: async () => ({ ok: true }),
+    });
+    const config = JSON.parse(await readFile(join(root, ".ahub", "config.json"), "utf8"));
+    assert.equal(config.providers.openai.baseUrl, "https://api.openai.com/v1");
+    assert.deepEqual(config.models.gptmini, { name: "GPT Mini", provider: "openai", model: "gpt-4o-mini", favorite: false, enabled: true });
+    assert.equal(config.defaults.activeModel, "gptmini");
+    assert.equal(config.agents.coder.model, "gptmini");
+    const creds = JSON.parse(await readFile(join(credentialHome, ".ahub", "credentials.json"), "utf8"));
+    assert.equal(creds.openai.apiKey, "wizard-key");
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+    await rm(credentialHome, { recursive: true, force: true });
+  }
+});

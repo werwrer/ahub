@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Current version: **0.6.0**
+Current version: **0.6.1**
 
 Use DeepSeek and other models inside Codex or Claude Code without losing the context of your current conversation.
 
@@ -86,13 +86,26 @@ ahub
 ```
 
 ```text
+This project
+  Agent            CLI      Model
+  architect        claude   inherit
+  coder            codex    ds4f
+  reviewer         claude   inherit
+
+  Providers        Status
+  DeepSeek         ● connected
+
+  Active model  DeepSeek V4 Flash (ds4f) · $0.14/M
+
 ? Control center
-❯ ▶  Run an agent       Start architect, coder, or reviewer
-  ⚙  Agent settings     Choose default CLI and model
-  ◇  Model library      Search, favorite, and manage every model
-  ⌁  Shortcut presets   Combine model, context, and agent role
+❯ ＋ Add model / provider  One wizard: provider → model → key → wrap-up
+  ▶  Run an agent          Start architect, coder, or reviewer
+  ⚙  Agent settings        Choose default CLI and model
+  ◇  Model library         Search, favorite, and manage every model
+  ⌁  Shortcut presets      Combine model, context, and agent role
   ＋ Install integrations  Add ahub to Claude Code or Codex
-  ●  Status & doctor     Check configuration and integrations
+  ●  Status & doctor       Check configuration and integrations
+  文  Language / 语言       Switch between English and 中文
   ×  Exit
 ```
 
