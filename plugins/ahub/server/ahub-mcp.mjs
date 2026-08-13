@@ -6,7 +6,7 @@ import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 
-const VERSION = "0.5.1";
+const VERSION = "0.6.0";
 const DEFAULT_MODEL = "deepseek-v4-flash";
 const MAX_CONTEXT = 60_000;
 const MAX_THREAD_TURNS = 6;     // cap prior turns replayed for thread continuity (bounds token cost)

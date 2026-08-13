@@ -166,6 +166,11 @@ const messages = {
     menuActionFailed: "操作失败：{error}",
     noCliFound: "未找到 Claude Code 或 Codex CLI，请先安装其一。",
     moreModelsHint: "想用更多模型？模型库 → Provider 连接 → 添加，可注册任意 OpenAI 兼容端点。",
+    providerSource: "如何添加 Provider？",
+    providerFromCatalog: "从常见 Provider 里选（已内置默认 Base URL，只需填 key）",
+    providerCustom: "自定义 Provider（手动填名称和 Base URL）",
+    providerKeyOnly: "{label} 已就绪：默认 Base URL 已配置，连接时只需提供 API key。",
+    allCatalogRegistered: "目录里的 Provider 都已注册。",
   },
   en: {
     tagline: "Your coding agents, one simple control center",
@@ -332,6 +337,11 @@ const messages = {
     menuActionFailed: "Action failed: {error}",
     noCliFound: "Neither the Claude Code nor the Codex CLI was found. Install one first.",
     moreModelsHint: "Want more models? Model library → Provider connections → Add registers any OpenAI-compatible endpoint.",
+    providerSource: "How do you want to add a provider?",
+    providerFromCatalog: "Pick a known provider (default base URL included — only the key is needed)",
+    providerCustom: "Custom provider (enter name and base URL manually)",
+    providerKeyOnly: "{label} is ready: its default base URL is configured, so connecting only needs the API key.",
+    allCatalogRegistered: "Every catalog provider is already registered.",
   },
 };
 

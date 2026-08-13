@@ -1,6 +1,6 @@
 {
   "name": "ahub",
-  "version": "0.2.0+codex.20260813112628",
+  "version": "0.2.0+codex.20260813114318",
   "description": "Use external models with host-selected conversation context and simple natural-language routing.",
   "author": {
     "name": "ahub"

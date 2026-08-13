@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-当前版本：**0.5.1**
+当前版本：**0.6.0**
 
 在 Codex 或 Claude Code 里使用 DeepSeek 及其它模型，不丢失当前对话的上下文。
 
@@ -166,10 +166,13 @@ Claude Code 在新会话或执行 `/reload-plugins` 后加载 ahub；Codex 在�
 ahub auth set deepseek
 ```
 
-DeepSeek 是内置 provider。要使用任何其他 OpenAI 兼容端点，先注册它，再加一个指向它的模型别名，最后连接密钥——这样每个有 provider 的模型都能通过 `@ahub` 委派，不再局限于 DeepSeek：
+DeepSeek 是内置 provider。常见 provider 用 `ahub provider add <name>` 注册时会**自动带上默认 Base URL**——之后只需要填 API key（`ahub provider catalog` 可查看目录；菜单里也有同样的选择器）。其它 OpenAI 兼容端点则手动传入 Base URL：
 
 ```bash
-ahub provider add acme https://api.acme.example.com --label "Acme"
+ahub provider add openai     # 已知 provider —— 默认 Base URL 自动填好
+ahub auth set openai         # 只需 key
+
+ahub provider add acme https://api.acme.example.com --label "Acme"   # 自定义端点
 ahub model set fast acme-fast --provider acme
 ahub auth set acme
 ahub model default fast   # 把 fast 设为 @ahub /ds 的当前模型

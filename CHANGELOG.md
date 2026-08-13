@@ -1,8 +1,9 @@
 # Changelog
 
-## 0.5.1 — 2026-08-13
+## 0.6.0 — 2026-08-13
 
-- Docs: rewrote `README.zh-CN.md` as a complete, section-for-section mirror of the English README (it had drifted and was missing the context-modes, configuration, current-scope, and local-development sections).
+- **Provider catalog**: adding a provider is now pick-a-provider instead of type-a-provider. Well-known OpenAI-compatible providers (OpenAI, Anthropic, Moonshot Kimi, Zhipu GLM, Qwen/DashScope, SiliconFlow, Groq, Mistral, OpenRouter, xAI, Together, Fireworks, Novita, Ollama) ship with their default base URL and response format pre-filled — `ahub provider add openai` registers one and only the API key is needed afterwards (`ahub provider catalog` lists them; the menu offers the same picker with an immediate connect prompt). Custom endpoints still work via `ahub provider add <name> <baseUrl>`.
+- Docs: complete zh-CN README (full mirror of the English README).
 
 ## 0.5.0 — 2026-08-13
 

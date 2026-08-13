@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_CONFIG, fallbackActiveModel, loadConfig, modelChoices, modelLabel, resolveAgent, resolveConfiguredModel, resolveProfileCommand, saveConfig } from "./config.mjs";
+import { PROVIDER_CATALOG, catalogChoices, catalogEntry } from "./catalog.mjs";
 import { compileContext } from "./context.mjs";
 import { commandVersion, runRuntime } from "./runtimes.mjs";
 import { getProviderCredential, getProviderSecret, loadSecrets, readHidden, removeProviderSecret, setProviderSecret } from "./secrets.mjs";
@@ -35,7 +36,8 @@ Automation and advanced commands:
   ahub auth set <provider> [--key-file <path>]
   ahub auth status
   ahub auth remove <provider>
-  ahub provider add <name> <baseUrl> [--label <label>]
+  ahub provider add <name> [<baseUrl>] [--label <label>]
+  ahub provider catalog
   ahub provider list
   ahub provider remove <name>
   ahub agent list
@@ -250,7 +252,29 @@ async function manageModelLibrary(root, config, prompts, t) {
   success(t("modelLibraryUpdated"));
 }
 
+// Add a provider: pick a known provider from the built-in catalog (default base URL and
+// response format come pre-filled — the user only supplies the key afterwards) or register
+// a custom OpenAI-compatible endpoint manually.
 async function addProvider(root, config, prompts, t) {
+  const source = await prompts.select(t("providerSource"), [
+    { name: t("providerFromCatalog"), value: "catalog" },
+    { name: t("providerCustom"), value: "custom" },
+    { name: t("back"), value: "back" },
+  ]);
+  if (source === "back") return undefined;
+  if (source === "custom") return addCustomProvider(root, config, prompts, t);
+  const available = catalogChoices(new Set(Object.keys(config.providers ?? {})));
+  if (!available.length) return warning(t("allCatalogRegistered"));
+  const name = await prompts.select(t("chooseProvider"), available);
+  const preset = catalogEntry(name);
+  config.providers = { ...(config.providers ?? {}), [name]: { ...preset } };
+  await saveConfig(root, config);
+  success(t("providerAdded", { name, label: preset.label }));
+  hint(t("providerKeyOnly", { label: preset.label }));
+  return name;
+}
+
+async function addCustomProvider(root, config, prompts, t) {
   const name = await prompts.ask(t("providerName"), {
     validate: (value) => (/^[a-z0-9][a-z0-9_-]*$/iu.test((value ?? "").trim()) ? true : t("providerNameInvalid")),
   });
@@ -593,7 +617,7 @@ async function onboarding(root, config, available, options = {}) {
   const t = translator(language);
   if (!options.quietUi) {
     clearScreen();
-    banner("0.5.1", t("tagline"));
+    banner("0.6.0", t("tagline"));
     section(t("quick1"), t("quick1Sub"));
   }
   const choices = [];
@@ -712,7 +736,7 @@ export async function main(argv, options = {}) {
     const t = translator(config.ui?.language ?? inferLanguage());
     if (!options.quietUi) {
       clearScreen();
-      banner("0.5.1", t("tagline"));
+      banner("0.6.0", t("tagline"));
       hint(`${t("project")}  ${root}`);
     }
     return controlCenter(root, options);
@@ -980,14 +1004,26 @@ export async function main(argv, options = {}) {
   if (command === "provider" && subcommand === "add") {
     if (!(await exists(paths(root).state))) await init(root);
     const positional = withoutFlags(rest, ["--label"]);
-    const [name, baseUrl] = positional;
-    if (!name || !baseUrl) throw new Error("usage: ahub provider add <name> <baseUrl> [--label <label>]");
+    const [name, baseUrlArg] = positional;
+    if (!name) throw new Error("usage: ahub provider add <name> [<baseUrl>] [--label <label>]");
     if (!/^[a-z0-9][a-z0-9_-]*$/iu.test(name)) throw new Error("provider name must use letters, numbers, hyphens, or underscores");
     const config = await loadConfig(root);
     const label = flag(rest, "--label", undefined);
-    config.providers = { ...(config.providers ?? {}), [name]: { label: label ?? name, baseUrl: baseUrl.replace(/\/$/u, ""), kind: "openai" } };
+    // Known catalog providers get their default base URL; custom ones require one.
+    const preset = catalogEntry(name);
+    if (!baseUrlArg && !preset) {
+      throw new Error(`unknown provider "${name}" and no baseUrl given. Known providers (auto base URL): ${Object.keys(PROVIDER_CATALOG).join(", ")}. See \`ahub provider catalog\`, or pass a custom baseUrl: ahub provider add ${name} https://…`);
+    }
+    const baseUrl = (baseUrlArg ?? preset.baseUrl).replace(/\/$/u, "");
+    if (!/^https?:\/\//iu.test(baseUrl)) throw new Error("baseUrl must start with http:// or https://");
+    config.providers = { ...(config.providers ?? {}), [name]: { label: label ?? preset?.label ?? name, baseUrl, kind: "openai" } };
     await saveConfig(root, config);
-    console.log(`Added provider ${name} → ${label ?? name} @ ${baseUrl}`);
+    console.log(`Added provider ${name} → ${label ?? preset?.label ?? name} @ ${baseUrl}${preset && !baseUrlArg ? " (preset)" : ""}`);
+    return;
+  }
+  if (command === "provider" && subcommand === "catalog") {
+    console.log("Known providers — `ahub provider add <name>` registers one with its default base URL:");
+    for (const [name, conf] of Object.entries(PROVIDER_CATALOG)) console.log(`  ${name.padEnd(14)} ${conf.label} · ${conf.baseUrl}`);
     return;
   }
   if (command === "provider" && subcommand === "remove") {

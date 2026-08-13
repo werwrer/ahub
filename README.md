@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Current version: **0.5.1**
+Current version: **0.6.0**
 
 Use DeepSeek and other models inside Codex or Claude Code without losing the context of your current conversation.
 
@@ -166,10 +166,13 @@ Choose **Model library → Provider connections → DeepSeek → Connect** in th
 ahub auth set deepseek
 ```
 
-DeepSeek is the built-in provider. To use any other OpenAI-compatible endpoint, register it, add a model alias pointing at it, then connect its key — every provider-backed model is then delegatable through `@ahub`, not only DeepSeek:
+DeepSeek is the built-in provider. For well-known providers, `ahub provider add <name>` registers them with their **default base URL** pre-filled — afterwards only the API key is needed (`ahub provider catalog` lists them; the menu offers the same picker). For any other OpenAI-compatible endpoint, pass a custom base URL:
 
 ```bash
-ahub provider add acme https://api.acme.example.com --label "Acme"
+ahub provider add openai     # known provider — default base URL auto-filled
+ahub auth set openai         # just the key
+
+ahub provider add acme https://api.acme.example.com --label "Acme"   # custom endpoint
 ahub model set fast acme-fast --provider acme
 ahub auth set acme
 ahub model default fast   # make `fast` the active model for @ahub /ds

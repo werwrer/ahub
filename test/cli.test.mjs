@@ -919,3 +919,73 @@ test("control center recovers from a failed action instead of dying with a stack
     await rm(emptyBin, { recursive: true, force: true });
   }
 });
+
+test("provider add with a known catalog name fills the default base URL", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-catalog-cli-"));
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await main(["init"], { root });
+    await main(["provider", "add", "openai"], { root });
+    const config = JSON.parse(await readFile(join(root, ".ahub", "config.json"), "utf8"));
+    assert.equal(config.providers.openai.baseUrl, "https://api.openai.com/v1");
+    assert.equal(config.providers.openai.label, "OpenAI");
+    assert.equal(config.providers.openai.kind, "openai");
+    // custom providers still need an explicit base URL
+    await assert.rejects(() => main(["provider", "add", "mygw"], { root }), /Known providers/u);
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("provider catalog lists known providers with default base URLs", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-catalog-list-"));
+  const log = console.log;
+  const out = [];
+  console.log = (line) => out.push(line);
+  try {
+    await main(["init"], { root });
+    await main(["provider", "catalog"], { root });
+    const text = out.join("\n");
+    assert.match(text, /openai\s+OpenAI · https:\/\/api\.openai\.com\/v1/u);
+    assert.match(text, /Kimi/u);
+    assert.match(text, /ollama\s+Ollama/u);
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("menu adds a catalog provider with just a key (no manual base URL)", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-catalog-menu-"));
+  const credentialHome = await mkdtemp(join(tmpdir(), "ahub-catalog-menu-home-"));
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await main(["init"], { root });
+    const selections = ["models", "providers", "__add__", "catalog", "openai", "__back__", "exit"];
+    const prompts = {
+      select: async () => selections.shift(),
+      ask: async () => "",
+      confirm: async () => true,
+      interactive: true,
+    };
+    await main([], {
+      root,
+      interactive: true,
+      prompts,
+      credentialHome,
+      readSecret: async () => "catalog-key",
+      validateCredential: async () => ({ ok: true }),
+    });
+    const config = JSON.parse(await readFile(join(root, ".ahub", "config.json"), "utf8"));
+    assert.equal(config.providers.openai.baseUrl, "https://api.openai.com/v1");
+    const creds = JSON.parse(await readFile(join(credentialHome, ".ahub", "credentials.json"), "utf8"));
+    assert.equal(creds.openai.apiKey, "catalog-key");
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+    await rm(credentialHome, { recursive: true, force: true });
+  }
+});
