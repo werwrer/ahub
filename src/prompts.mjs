@@ -26,6 +26,11 @@ async function guardBack(runPromise, choices) {
   }
 }
 
+// Always-visible key hints (inquirer renders these as the green help line).
+const NAV_HINT = "↑↓ 选择 · Enter 确认 · Esc 返回  (↑↓ move · Enter confirm · Esc back)";
+const SEARCH_HINT = "输入过滤 · ↑↓ 选择 · Enter 确认 · Esc 返回  (type to filter · Esc back)";
+const instructions = (hint) => ({ navigation: hint, pager: hint });
+
 export function createPrompts(input = process.stdin, output = process.stdout) {
   const terminal = Boolean(input.isTTY && output.isTTY);
   const askFallback = async (message) => {
@@ -49,7 +54,7 @@ export function createPrompts(input = process.stdin, output = process.stdout) {
     : askFallback(message);
   const select = async (message, choices) => {
     const normalized = choices.map((choice) => ({ ...choice, name: choice.name ?? choice.label }));
-    if (terminal) return guardBack(run({ type: "select", name: "value", message, choices: normalized, pageSize: 12, loop: true, theme: { helpMode: "never" } }), choices);
+    if (terminal) return guardBack(run({ type: "select", name: "value", message, choices: normalized, pageSize: 12, loop: true, instructions: instructions(NAV_HINT) }), choices);
     output.write(`\n${message}\n`);
     choices.forEach((choice, index) => output.write(`  ${index + 1}. ${choice.name ?? choice.label}\n`));
     while (true) {
@@ -67,11 +72,11 @@ export function createPrompts(input = process.stdin, output = process.stdout) {
       name: "value",
       message,
       pageSize: 12,
+      instructions: instructions(SEARCH_HINT),
       source: async (term = "") => {
         const query = term.trim().toLocaleLowerCase();
         return query ? normalized.filter((choice) => choice.name.toLocaleLowerCase().includes(query)) : normalized;
       },
-      theme: { helpMode: "never" },
     }), normalized);
   };
   const confirm = (message, initial = true) => terminal
@@ -81,7 +86,7 @@ export function createPrompts(input = process.stdin, output = process.stdout) {
     ? run({ type: "password", name: "value", message, mask: "•", validate: (value) => value.trim() ? true : "API key cannot be empty" })
     : askFallback(message);
   const checkbox = (message, choices) => terminal
-    ? guardBack(run({ type: "checkbox", name: "value", message, choices: choices.map((choice) => ({ ...choice, name: choice.name ?? choice.label })), loop: true, instructions: false, validate: (items) => items.length ? true : "Select at least one option" }), choices)
+    ? guardBack(run({ type: "checkbox", name: "value", message, choices: choices.map((choice) => ({ ...choice, name: choice.name ?? choice.label })), loop: true, instructions: "空格 选择 · Enter 确认 · Esc 返回  (Space toggle · Enter confirm · Esc back)", validate: (items) => items.length ? true : "Select at least one option" }), choices)
     : Promise.resolve(choices.filter((choice) => choice.checked).map((choice) => choice.value));
 
   return { ask, select, search, confirm, password, checkbox, interactive: terminal };

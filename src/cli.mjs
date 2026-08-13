@@ -684,6 +684,8 @@ async function controlCenter(root, options = {}) {
         await main(args, { ...options, root, interactive: false });
       }
     } catch (error) {
+      // Esc anywhere without a closer back item lands here: silently return to the menu.
+      if (error?.code === "CANCELLED") continue;
       // Keep the menu alive: surface the failure and loop back instead of dying with a stack trace.
       warning(t("menuActionFailed", { error: error.message }));
     }
@@ -819,7 +821,12 @@ export async function main(argv, options = {}) {
       banner("0.7.1", t("tagline"));
       hint(`${t("project")}  ${root}`);
     }
-    return controlCenter(root, options);
+    try {
+      return await controlCenter(root, options);
+    } catch (error) {
+      if (error?.code === "CANCELLED") return; // Esc at the top level exits cleanly
+      throw error;
+    }
   }
   if (command === "help" || command === "--help" || command === "-h") return console.log(subcommand === "--all" ? FULL_HELP : HELP);
   if (command === "setup") {
@@ -829,8 +836,13 @@ export async function main(argv, options = {}) {
     const config = await loadConfig(root);
     const [claude, codex] = await Promise.all([commandVersion("claude"), commandVersion("codex")]);
     const onlyAvailableCli = claude && !codex ? "claude" : codex && !claude ? "codex" : undefined;
-    if (firstSetup && interactive) await onboarding(root, config, { claude, codex }, options);
-    else if (firstSetup && onlyAvailableCli) await onboarding(root, config, { claude, codex }, { ...options, prompts: { select: async (_message, choices) => choices[0].value } });
+    try {
+      if (firstSetup && interactive) await onboarding(root, config, { claude, codex }, options);
+      else if (firstSetup && onlyAvailableCli) await onboarding(root, config, { claude, codex }, { ...options, prompts: { select: async (_message, choices) => choices[0].value } });
+    } catch (error) {
+      if (error?.code === "CANCELLED") return; // Esc during setup exits cleanly
+      throw error;
+    }
     console.log("\nahub is ready.\n");
     if (onlyAvailableCli && firstSetup) console.log(`  Using ${onlyAvailableCli} for every agent (the other CLI was not found).\n`);
     const configuredCli = (name) => config.agents[name].cli ?? config.agents[name].runtime;
