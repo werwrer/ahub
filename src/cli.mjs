@@ -322,8 +322,11 @@ async function renderDashboard(root, config, t, options) {
   for (const [name, agent] of Object.entries(config.agents)) {
     console.log(`  ${name.padEnd(11)} ${(agent.cli ?? agent.runtime).padEnd(8)} ${agent.model ?? "inherit"}`);
   }
-  for (const [key, conf] of Object.entries(providers)) {
-    console.log(`  ${(conf.label ?? key).padEnd(14)} ${readiness[key] ? t("connectedShort") : t("notConnectedShort")}`);
+  if (Object.keys(providers).length) {
+    console.log(`\n${t("providersTitle")}`);
+    for (const [key, conf] of Object.entries(providers)) {
+      console.log(`  ${(conf.label ?? key).padEnd(14)} ${readiness[key] ? t("connectedShort") : t("notConnectedShort")}`);
+    }
   }
   const active = config.models[config.defaults.activeModel];
   console.log(`\n${t("activeModel")}  ${active ? modelShort(config.defaults.activeModel, active) : config.defaults.activeModel}\n`);
@@ -630,9 +633,11 @@ async function controlCenter(root, options = {}) {
     const action = await prompts.select(t("controlCenter"), [
       { name: t("addModelAction"), value: "addModel" },
       { name: t("runAgent"), value: "run" },
+      { type: "separator", line: "─────────────" },
       { name: t("agentSettings"), value: "agents" },
       { name: t("modelSettings"), value: "models" },
       { name: t("shortcutSettings"), value: "shortcuts" },
+      { type: "separator", line: "─────────────" },
       { name: t("install"), value: "install" },
       { name: t("statusDoctor"), value: "status" },
       { name: t("language"), value: "language" },

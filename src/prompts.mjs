@@ -29,8 +29,8 @@ async function guardBack(runPromise, choices) {
 }
 
 // Always-visible key hints (inquirer renders these as the green help line).
-const NAV_HINT = "↑↓ 选择 · Enter 确认 · Esc 返回  (↑↓ move · Enter confirm · Esc back)";
-const SEARCH_HINT = "输入过滤 · ↑↓ 选择 · Enter 确认 · Esc 返回  (type to filter · Esc back)";
+const NAV_HINT = "↑↓ · Enter · Esc";
+const SEARCH_HINT = "type to filter · ↑↓ · Enter · Esc";
 const instructions = (hint) => ({ navigation: hint, pager: hint });
 
 export function createPrompts(input = process.stdin, output = process.stdout) {
