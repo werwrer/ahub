@@ -68,7 +68,7 @@ export function createPrompts(input = process.stdin, output = process.stdout) {
     ? run({ type: "input", name: "value", message, default: options.default, validate: options.validate })
     : askFallback(message);
   const select = async (message, choices) => {
-    const normalized = choices.map((choice) => ({ ...choice, name: choice.name ?? choice.label }));
+    const normalized = choices.map((choice) => choice?.type === "separator" ? choice : { ...choice, name: choice.name ?? choice.label });
     if (terminal) return guardBack(run({ type: "select", name: "value", message, choices: normalized, pageSize: 12, loop: true, instructions: instructions(NAV_HINT) }), choices);
     output.write(`\n${message}\n`);
     choices.forEach((choice, index) => output.write(`  ${index + 1}. ${choice.name ?? choice.label}\n`));

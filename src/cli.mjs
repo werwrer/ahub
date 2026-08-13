@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { DEFAULT_CONFIG, fallbackActiveModel, loadConfig, modelChoices, modelDetail, modelLabel, modelShort, resolveAgent, resolveConfiguredModel, resolveProfileCommand, saveConfig } from "./config.mjs";
 import { PROVIDER_CATALOG, catalogChoices, catalogEntry } from "./catalog.mjs";
 import { buildExportMarkdown, backupWorkspace, exportDelegations, writeBackupFile, writeExportFile } from "../plugins/ahub/server/ahub-mcp.mjs";
+import { Separator } from "@inquirer/core";
 import { compileContext } from "./context.mjs";
 import { commandVersion, runRuntime } from "./runtimes.mjs";
 import { getProviderCredential, getProviderSecret, loadSecrets, readHidden, removeProviderSecret, setProviderSecret } from "./secrets.mjs";
@@ -633,11 +634,11 @@ async function controlCenter(root, options = {}) {
     const action = await prompts.select(t("controlCenter"), [
       { name: t("addModelAction"), value: "addModel" },
       { name: t("runAgent"), value: "run" },
-      { type: "separator", line: "─────────────" },
+      new Separator("─── ─── ───"),
       { name: t("agentSettings"), value: "agents" },
       { name: t("modelSettings"), value: "models" },
       { name: t("shortcutSettings"), value: "shortcuts" },
-      { type: "separator", line: "─────────────" },
+      new Separator("─── ─── ───"),
       { name: t("install"), value: "install" },
       { name: t("statusDoctor"), value: "status" },
       { name: t("language"), value: "language" },
