@@ -625,30 +625,37 @@ async function configureShortcuts(root, prompts, t) {
   hint(`@ahub ${name} …`);
 }
 
+// Give the user time to read output before the dashboard+menu replaces it.
+async function pauseForRead(prompts, t) {
+  await prompts.select(t("backToMenu"), [{ name: t("backToMenu"), value: "ok" }]);
+}
+
 async function controlCenter(root, options = {}) {
   const prompts = options.prompts ?? createPrompts();
   const repeat = options.loop ?? prompts.interactive === true;
   if (!options.quietUi) {
-    const config = await loadConfig(root);
-    const t = translator(config.ui?.language ?? inferLanguage());
     clearScreen();
     intro(`${chalk.bold("ahub")} ${chalk.dim(`v0.7.2`)}  ${chalk.dim(root)}`);
   }
+  let showDashboard = true; // render once on entry, then only after a pause
   do {
     const config = await loadConfig(root);
     const t = translator(config.ui?.language ?? inferLanguage());
-    await renderDashboard(root, config, t, options);
+    if (showDashboard) {
+      await renderDashboard(root, config, t, options);
+      showDashboard = false;
+    }
     const action = await prompts.select(t("controlCenter"), [
-      { name: t("addModelAction"), value: "addModel" },
-      { name: t("runAgent"), value: "run" },
+      { name: t("addModelAction"), value: "addModel", description: t("addModelDesc") },
+      { name: t("runAgent"), value: "run", description: t("runAgentDesc") },
       new Separator("─── ─── ───"),
-      { name: t("agentSettings"), value: "agents" },
-      { name: t("modelSettings"), value: "models" },
-      { name: t("shortcutSettings"), value: "shortcuts" },
+      { name: t("agentSettings"), value: "agents", description: t("agentSettingsDesc") },
+      { name: t("modelSettings"), value: "models", description: t("modelSettingsDesc") },
+      { name: t("shortcutSettings"), value: "shortcuts", description: t("shortcutsDesc") },
       new Separator("─── ─── ───"),
-      { name: t("install"), value: "install" },
-      { name: t("statusDoctor"), value: "status" },
-      { name: t("language"), value: "language" },
+      { name: t("install"), value: "install", description: t("installDesc") },
+      { name: t("statusDoctor"), value: "status", description: t("statusDesc") },
+      { name: t("language"), value: "language", description: t("languageDesc") },
       { name: t("exit"), value: "exit" },
     ]);
     if (action === "exit") { if (!options.quietUi) outro(); return; }
@@ -665,6 +672,8 @@ async function controlCenter(root, options = {}) {
       if (action === "status") {
         showConfig(root, await loadConfig(root), t, options);
         await pluginStatus(root, t);
+        await pauseForRead(prompts, t); // let the user read before the menu returns
+        showDashboard = true; // refresh state after the pause
       }
       if (action === "install") {
         const status = await getSystemStatus(root);
