@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_CONFIG, fallbackActiveModel, loadConfig, modelChoices, modelLabel, resolveAgent, resolveConfiguredModel, resolveProfileCommand, saveConfig } from "./config.mjs";
+import { DEFAULT_CONFIG, fallbackActiveModel, loadConfig, modelChoices, modelDetail, modelLabel, modelShort, resolveAgent, resolveConfiguredModel, resolveProfileCommand, saveConfig } from "./config.mjs";
 import { PROVIDER_CATALOG, catalogChoices, catalogEntry } from "./catalog.mjs";
 import { buildExportMarkdown, backupWorkspace, exportDelegations, writeBackupFile, writeExportFile } from "../plugins/ahub/server/ahub-mcp.mjs";
 import { compileContext } from "./context.mjs";
@@ -177,12 +177,12 @@ async function showConfig(root, config, t = translator(config.ui?.language ?? in
   console.log(`  inherit     ${t("inheritRow")}`);
   for (const [name, model] of Object.entries(config.models)) {
     const ready = model.provider ? (readiness[model.provider] ?? t("readyShort")) : t("readyShort");
-    const ctx = model.contextWindow ? ` · ${Math.round(model.contextWindow / 1000)}k ctx` : "";
-    console.log(`  ${name.padEnd(14)} ${modelLabel(name, model, providers)}${ctx} · ${model.enabled === false ? t("hiddenShort") : ready}`);
+    const detail = modelDetail(name, model, providers);
+    console.log(`  ${name.padEnd(14)} ${detail} · ${model.enabled === false ? t("hiddenShort") : ready}`);
   }
   const activeAlias = config.defaults.activeModel;
   const activeModel = config.models[activeAlias];
-  const activeDisplay = activeModel ? modelLabel(activeAlias, activeModel, providers) : activeAlias;
+  const activeDisplay = activeModel ? modelShort(activeAlias, activeModel) : activeAlias;
   console.log(`\n${t("activeModel")}  ${activeDisplay}`);
 }
 
@@ -317,19 +317,16 @@ async function renderDashboard(root, config, t, options) {
   await Promise.all(Object.keys(providers).map(async (key) => {
     readiness[key] = Boolean(await getProviderSecret(root, key, options));
   }));
-  section(t("dashboardTitle"), "");
+  section(t("dashboardTitle"));
   console.log(`\n${t("agents")}`);
   for (const [name, agent] of Object.entries(config.agents)) {
     console.log(`  ${name.padEnd(11)} ${(agent.cli ?? agent.runtime).padEnd(8)} ${agent.model ?? "inherit"}`);
   }
-  if (Object.keys(providers).length) {
-    console.log(`\n${t("providersTitle")}`);
-    for (const [key, conf] of Object.entries(providers)) {
-      console.log(`  ${(conf.label ?? key).padEnd(14)} ${readiness[key] ? t("connectedShort") : t("notConnectedShort")}`);
-    }
+  for (const [key, conf] of Object.entries(providers)) {
+    console.log(`  ${(conf.label ?? key).padEnd(14)} ${readiness[key] ? t("connectedShort") : t("notConnectedShort")}`);
   }
   const active = config.models[config.defaults.activeModel];
-  console.log(`\n${t("activeModel")}  ${active ? modelLabel(config.defaults.activeModel, active, providers) : config.defaults.activeModel}\n`);
+  console.log(`\n${t("activeModel")}  ${active ? modelShort(config.defaults.activeModel, active) : config.defaults.activeModel}\n`);
 }
 
 // Step 1 of the add-model wizard: where does the model run? Registered providers are listed

@@ -194,16 +194,29 @@ export function resolveConfiguredModel(config, value) {
   return config.models[value] ?? { model: value };
 }
 
-export function modelLabel(alias, model, providers = {}) {
+// Compact label for pickers: "★ DeepSeek V4 Flash [ds4f]" — searchable by alias or name.
+export function modelLabel(alias, model, _providers = {}) {
+  const title = model.name ?? alias;
+  const suffix = alias && title !== alias ? ` [${alias}]` : "";
+  return `${model.favorite ? "★ " : ""}${title}${suffix}`;
+}
+
+// Ultra-short for dashboards: "★ DeepSeek V4 Flash" — no alias, no details.
+export function modelShort(alias, model) {
+  const title = model.name ?? alias;
+  return `${model.favorite ? "★ " : ""}${title}`;
+}
+
+// Full detail line for browse/view (model ID + provider + cost + tags appended).
+export function modelDetail(alias, model, providers = {}) {
   const title = model.name ?? alias;
   const providerConf = model.provider ? providers[model.provider] : undefined;
   const source = providerConf?.label ?? model.provider ?? "host CLI";
   const tags = Array.isArray(model.tags) && model.tags.length ? ` · ${model.tags.join(", ")}` : "";
   const costPerM = typeof model.cost === "number" ? model.cost : (model.cost && (model.cost.output ?? model.cost.input));
   const costHint = costPerM ? ` · $${costPerM}/M` : "";
-  // Lead with the alias when it differs from the display name, so the picker is searchable by alias.
-  const prefix = alias && title !== alias ? `${alias} · ` : "";
-  return `${model.favorite ? "★ " : ""}${prefix}${title} · ${model.model} · ${source}${costHint}${tags}`;
+  const ctx = model.contextWindow ? ` · ${Math.round(model.contextWindow / 1000)}k ctx` : "";
+  return `${model.model} · ${source}${costHint}${tags}${ctx}`;
 }
 
 // Pick a fallback active model when the current one is being hidden or removed.
