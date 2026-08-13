@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Current version: **0.7.0**
+Current version: **0.7.1**
 
 Use DeepSeek and other models inside Codex or Claude Code without losing the context of your current conversation.
 
@@ -55,8 +55,8 @@ Inside Codex App, the ahub plugin delegates directly through its bundled MCP too
 Natural language is the recommended interface:
 
 ```text
-@ahub 用 DeepSeek 继续分析我们刚才讨论的方案
-@ahub 请让 DeepSeek 独立审查这个结论，不参考前面的答案
+@ahub Continue analyzing the architecture we just discussed with DeepSeek
+@ahub Ask DeepSeek for an independent review of this conclusion, without the previous answer
 ```
 
 Optional shortcuts compose across three independent dimensions:
@@ -67,7 +67,7 @@ Optional shortcuts compose across three independent dimensions:
 
 `/ds` points to your active (current) model, so changing it does not require relearning commands or updating every prompt. Any connected provider works — DeepSeek is the built-in default, and you can register more.
 
-For example, `@ahub /ds /fresh /review 审查这个结论` asks DeepSeek for a fresh independent review. Full-context delegation always requires confirmation. To save `/省钱审查` as DeepSeek + related context + reviewer, open **Shortcut presets / 快捷预设** in the `ahub` menu—no command syntax is required.
+For example, `@ahub /ds /fresh /review review this conclusion` asks DeepSeek for a fresh independent review. Full-context delegation always requires confirmation. To save `/cheap-review` as DeepSeek + related context + reviewer, open **Shortcut presets** in the `ahub` menu—no command syntax is required.
 
 For development from this checkout:
 
@@ -147,13 +147,13 @@ Typing `@` in the Codex or GPT app shows five namespaced shortcuts:
 Natural language is the primary interface:
 
 ```text
-@ahub-coder 用 Claude Code 自带的模型修复登录问题
-@ahub-reviewer 这次用便宜模型审查支付模块
-@ahub-config 以后 coder 默认使用 Claude Code，并继承它自己的模型配置
-@ahub-config 添加一个叫 fast 的模型，模型 ID 是 my-fast-model
+@ahub-coder Fix the login bug using Claude Code's own model
+@ahub-reviewer Review the payment module with a cheaper model this time
+@ahub-config From now on, the coder should default to Claude Code and inherit its own model configuration
+@ahub-config Add a model named fast with model ID my-fast-model
 ```
 
-“这次” affects one request. “以后” or “默认” changes persistent agent configuration. ahub confirms persistent changes in plain language.
+"this time" affects one request. "from now on" or "default" changes persistent agent configuration. ahub confirms persistent changes in plain language.
 
 For host-context delegation, use the small composable vocabulary shown above. The older terminal automation aliases below remain compatible, but they are no longer the recommended in-app interface:
 
@@ -166,7 +166,7 @@ For host-context delegation, use the small composable vocabulary shown above. Th
 
 Commands are composable and represent separate dimensions:
 
-- `/ds4f`, `/cheap`, `/flash`, `/省钱` choose `deepseek-v4-flash`.
+- `/ds4f`, `/cheap`, `/flash` choose `deepseek-v4-flash`.
 - `/cc` chooses Claude Code CLI.
 - `/cx` chooses Codex CLI.
 - Without `/cc` or `/cx`, the selected agent keeps its default CLI.
@@ -197,24 +197,24 @@ The prompt hides input. ahub writes the key to `~/.ahub/credentials.json` with o
 Legacy terminal automation can still define low-level commands without editing JSON:
 
 ```bash
-ahub command set /省点 profile:cheap
-ahub command set /克劳德 cli:claude
-ahub command set /考德克斯 cli:codex
+ahub command set /cheap profile:cheap
+ahub command set /claude cli:claude
+ahub command set /codex cli:codex
 ```
 
-Then use `@ahub-coder /省点 /考德克斯 Fix the tests`.
+Then use `@ahub-coder /cheap /codex Fix the tests`.
 
 For Codex App host-context delegation, create a single readable preset from the terminal menu instead:
 
 ```text
 ahub → Shortcut presets → Create
-Name: /省钱审查
+Name: /cheap-review
 Model: DeepSeek V4 Flash
 Context: Related
 Role: Reviewer
 ```
 
-Then type `@ahub /省钱审查 检查当前方案` in Codex. The preset is a preference, not a hidden prompt: explicit natural-language instructions in the current request take priority.
+Then type `@ahub /cheap-review check this plan` in Codex. The preset is a preference, not a hidden prompt: explicit natural-language instructions in the current request take priority.
 
 ## Advanced automation
 

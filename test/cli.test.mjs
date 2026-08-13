@@ -1075,3 +1075,28 @@ test("ahub export --session exports terminal automation runs", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("ahub backup writes a lossless JSON snapshot", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-backup-cli-"));
+  const log = console.log;
+  const out = [];
+  console.log = (line) => out.push(line);
+  try {
+    await main(["init"], { root });
+    await writeFile(join(root, ".ahub", "delegations.jsonl"), JSON.stringify({
+      id: "e1", threadId: "auth", model: "deepseek-v4-flash", provider: "deepseek", role: "general",
+      task: "design auth", output: "Use rotating tokens.", context: "refresh-token discussion",
+      contextMode: "related", at: new Date().toISOString(),
+    }) + "\n");
+    await main(["backup"], { root });
+    const pathLine = out.find((line) => /→/u.test(String(line)));
+    assert.ok(pathLine, "backup path not printed");
+    const path = String(pathLine).split("→")[1].trim();
+    const backup = JSON.parse(await readFile(path, "utf8"));
+    assert.equal(backup.delegations.length, 1);
+    assert.match(backup.delegations[0].context, /refresh-token discussion/u);
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+  }
+});

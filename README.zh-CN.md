@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-当前版本：**0.7.0**
+当前版本：**0.7.1**
 
 在 Codex 或 Claude Code 里使用 DeepSeek 及其它模型，不丢失当前对话的上下文。
 
@@ -42,8 +42,8 @@ ahub
 然后用自然语言：
 
 ```text
-@ahub Use DeepSeek to continue analyzing the architecture we just discussed
-@ahub Ask DeepSeek for an independent review without using the previous answer
+@ahub 用 DeepSeek 继续分析我们刚才讨论的架构
+@ahub 请 DeepSeek 独立审查这个结论，不参考前面的答案
 ```
 
 首次运行会先询问 中文 或 English，然后进入三步设置向导：选择编程终端、选择模型、安装集成。语言按项目保存，随时可在控制中心的「Language / 语言」里修改。全程只用 ↑/↓ 和回车，无需记忆任何命令。
@@ -133,7 +133,7 @@ Claude Code 在新会话或执行 `/reload-plugins` 后加载 ahub；Codex 在�
 新建一个 Codex 任务并提问：
 
 ```text
-@ahub ask the architect to analyze this project
+@ahub 请 architect 分析这个项目
 ```
 
 在 Codex 或 GPT 应用里输入 `@` 会显示五个带命名空间的快捷入口：
@@ -158,10 +158,10 @@ Claude Code 在新会话或执行 `/reload-plugins` 后加载 ahub；Codex 在�
 宿主上下文委派使用上面这套小而可组合的词汇。下面这些更早的终端自动化别名仍然兼容，但不再是推荐的宿主内交互方式：
 
 ```text
-@ahub-coder /cc Fix all lint errors
-@ahub-coder /ds4f /cx Fix all lint errors
-@ahub-architect /ds4f /cc Analyze this architecture
-@ahub-reviewer /best Review the payment changes
+@ahub-coder /cc 修复所有 lint 错误
+@ahub-coder /ds4f /cx 修复所有 lint 错误
+@ahub-architect /ds4f /cc 分析这个架构
+@ahub-reviewer /best 审查支付模块的改动
 ```
 
 命令可组合，代表彼此独立的维度：
@@ -172,7 +172,7 @@ Claude Code 在新会话或执行 `/reload-plugins` 后加载 ahub；Codex 在�
 - 不带 `/cc` 或 `/cx` 时，所选智能体沿用它的默认终端。
 - 不带模型命令时，ahub 不传模型覆盖，Claude Code 或 Codex 使用该终端里已配置的模型。
 
-也就是说 `@ahub-coder /cc Fix the tests` 使用 Claude Code 及其自带模型；只有 `@ahub-coder /ds4f /cc Fix the tests` 才会显式把模型覆盖为 DeepSeek V4 Flash。
+也就是说 `@ahub-coder /cc 修复测试` 使用 Claude Code 及其自带模型；只有 `@ahub-coder /ds4f /cc 修复测试` 才会显式把模型覆盖为 DeepSeek V4 Flash。
 
 从终端菜单选择「模型库 → Provider 连接 → DeepSeek → 连接」。ahub 会先验证密钥再保存，然后询问是否把 DeepSeek 分配给某个智能体。等价的脚本命令是：
 
@@ -202,7 +202,7 @@ ahub command set /克劳德 cli:claude
 ahub command set /考德克斯 cli:codex
 ```
 
-然后使用 `@ahub-coder /省点 /考德克斯 Fix the tests`。
+然后使用 `@ahub-coder /省点 /考德克斯 修复测试`。
 
 Codex APP 的宿主上下文委派建议改用终端菜单创建一个可读的预设：
 

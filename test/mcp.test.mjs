@@ -9,7 +9,7 @@ test("MCP server advertises host-context delegation tools", async () => {
   const initialized = await handle({ method: "initialize", params: { protocolVersion: "2025-06-18" } });
   const listed = await handle({ method: "tools/list" });
   assert.equal(initialized.serverInfo.name, "ahub");
-  assert.deepEqual(listed.tools.map((tool) => tool.name), ["delegate", "status", "connect", "recall", "forget", "export"]);
+  assert.deepEqual(listed.tools.map((tool) => tool.name), ["delegate", "status", "connect", "recall", "forget", "export", "backup"]);
   assert.match(listed.tools[0].description, /host.*context/iu);
 });
 
@@ -670,7 +670,7 @@ test("export filters to a single thread", async () => {
   }
 });
 
-test("delegation log caps stored context for export", async () => {
+test("delegation log stores the full context for lossless backup", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "ahub-mcp-contextcap-"));
   const credentialHome = await mkdtemp(join(tmpdir(), "ahub-mcp-contextcap-home-"));
   await mkdir(join(workspace, ".ahub"), { recursive: true });
@@ -678,11 +678,36 @@ test("delegation log caps stored context for export", async () => {
   await writeFile(join(workspace, ".ahub", "config.json"), JSON.stringify({ models: { ds4f: { provider: "deepseek", model: "x" } } }));
   await writeFile(join(credentialHome, ".ahub", "credentials.json"), JSON.stringify({ deepseek: { apiKey: "k" } }));
   try {
-    await delegate({ task: "t", context: "c".repeat(30_000), workspace }, { credentialHome, fetch: () => jsonDelegateReply("ok") });
+    const context = "c".repeat(30_000);
+    await delegate({ task: "t", context, workspace }, { credentialHome, fetch: () => jsonDelegateReply("ok") });
     const log = await readFile(join(workspace, ".ahub", "delegations.jsonl"), "utf8");
     const entry = JSON.parse(log.trim().split("\n")[0]);
-    assert.ok(entry.context.length < 18_000, `stored context too large: ${entry.context.length}`);
-    assert.match(entry.context, /characters elided/u);
+    assert.equal(entry.context, context); // full context preserved, nothing elided
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+    await rm(credentialHome, { recursive: true, force: true });
+  }
+});
+
+test("backup writes a lossless JSON snapshot (delegations + state + config, no credentials)", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "ahub-mcp-backup-"));
+  const credentialHome = await mkdtemp(join(tmpdir(), "ahub-mcp-backup-home-"));
+  await mkdir(join(workspace, ".ahub"), { recursive: true });
+  await mkdir(join(credentialHome, ".ahub"), { recursive: true });
+  await writeFile(join(workspace, ".ahub", "config.json"), JSON.stringify({ models: { ds4f: { provider: "deepseek", model: "x" } } }));
+  await writeFile(join(credentialHome, ".ahub", "credentials.json"), JSON.stringify({ deepseek: { apiKey: "super-secret-key" } }));
+  await writeFile(join(workspace, ".ahub", "state.json"), JSON.stringify({ version: 1, revision: 0, sessions: [], events: [] }));
+  try {
+    await delegate({ task: "design auth", context: "refresh-token discussion", workspace }, { credentialHome, fetch: () => jsonDelegateReply("Use rotating tokens.") });
+    const response = await handle({ method: "tools/call", params: { name: "backup", arguments: { workspace } } });
+    assert.equal(response.structuredContent.delegations, 1);
+    const backup = JSON.parse(await readFile(response.structuredContent.path, "utf8"));
+    assert.equal(backup.delegations.length, 1);
+    assert.match(backup.delegations[0].context, /refresh-token discussion/u);
+    assert.match(backup.ahub, /^\d+\.\d+\.\d+$/u);
+    assert.ok(backup.state);
+    assert.ok(backup.config);
+    assert.doesNotMatch(JSON.stringify(backup), /super-secret-key/u); // credentials excluded
   } finally {
     await rm(workspace, { recursive: true, force: true });
     await rm(credentialHome, { recursive: true, force: true });

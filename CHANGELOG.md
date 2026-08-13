@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.1 — 2026-08-13
+
+- **Backup vs handover, separated**: delegations now store the **full** redacted context (no 16k cap), and two distinct capabilities replace the old conflated export: `backup` (lossless JSON snapshot of delegations + terminal sessions + config to `.ahub/backups/`; credentials deliberately excluded; MCP `backup` tool + `ahub backup`) and `export` (the readable Markdown handover document for other AI clients, unchanged).
+- Docs: the two READMEs are now strictly single-language — the English README contains only English examples, the Chinese README only Chinese ones (UI labels and CLI commands excepted).
+
 ## 0.7.0 — 2026-08-13
 
 - **Conversation migration (export to Markdown)**: export ahub-held conversations into a self-contained Markdown document — tasks, the shared host context, and answers per turn, with model/token/cost metadata — ready to hand to another AI client (ChatGPT, Cursor, …). In-app via the new `export` MCP tool (optionally per `threadId`); from the terminal via `ahub export [<threadId>] [--session <name>] [--out <path>]`, which also exports terminal automation sessions. Files land in `.ahub/exports/` (owner-only, gitignored). To support this, each delegation now also stores the (redacted, capped) host context.

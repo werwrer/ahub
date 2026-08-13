@@ -3,7 +3,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_CONFIG, fallbackActiveModel, loadConfig, modelChoices, modelLabel, resolveAgent, resolveConfiguredModel, resolveProfileCommand, saveConfig } from "./config.mjs";
 import { PROVIDER_CATALOG, catalogChoices, catalogEntry } from "./catalog.mjs";
-import { buildExportMarkdown, exportDelegations, writeExportFile } from "../plugins/ahub/server/ahub-mcp.mjs";
+import { buildExportMarkdown, backupWorkspace, exportDelegations, writeBackupFile, writeExportFile } from "../plugins/ahub/server/ahub-mcp.mjs";
 import { compileContext } from "./context.mjs";
 import { commandVersion, runRuntime } from "./runtimes.mjs";
 import { getProviderCredential, getProviderSecret, loadSecrets, readHidden, removeProviderSecret, setProviderSecret } from "./secrets.mjs";
@@ -42,6 +42,7 @@ Automation and advanced commands:
   ahub provider list
   ahub provider remove <name>
   ahub export [<threadId>] [--session <name>] [--out <path>]
+  ahub backup [--out <path>]
   ahub agent list
   ahub agent set <agent> <cli|model> <value>
   ahub command list
@@ -696,7 +697,7 @@ async function onboarding(root, config, available, options = {}) {
   const t = translator(language);
   if (!options.quietUi) {
     clearScreen();
-    banner("0.7.0", t("tagline"));
+    banner("0.7.1", t("tagline"));
     section(t("quick1"), t("quick1Sub"));
   }
   const choices = [];
@@ -747,7 +748,7 @@ async function init(root) {
   await mkdir(target.dir, { recursive: true });
   await saveState(root, emptyState());
   await saveConfig(root, DEFAULT_CONFIG);
-  await writeFile(resolve(target.dir, ".gitignore"), "state.json\nsecrets.json\ndelegations.jsonl\nexports/\n*.tmp\n");
+  await writeFile(resolve(target.dir, ".gitignore"), "state.json\nsecrets.json\ndelegations.jsonl\nexports/\nbackups/\n*.tmp\n");
   console.log(`Initialized ahub in ${target.dir}`);
 }
 
@@ -815,7 +816,7 @@ export async function main(argv, options = {}) {
     const t = translator(config.ui?.language ?? inferLanguage());
     if (!options.quietUi) {
       clearScreen();
-      banner("0.7.0", t("tagline"));
+      banner("0.7.1", t("tagline"));
       hint(`${t("project")}  ${root}`);
     }
     return controlCenter(root, options);
@@ -1153,6 +1154,15 @@ export async function main(argv, options = {}) {
     const { markdown, meta } = await exportDelegations(root, { threadId });
     const path = await writeExportFile(root, markdown, { out, scope: threadId ?? "all-threads" });
     console.log(`Exported ${meta.turns} turn(s) across ${meta.threads} thread(s) → ${path}`);
+    return;
+  }
+  if (command === "backup") {
+    if (!(await exists(paths(root).state))) await init(root);
+    const out = flag([subcommand, ...rest].filter((arg) => arg !== undefined), "--out", undefined);
+    const backup = await backupWorkspace(root);
+    const path = await writeBackupFile(root, backup, { out });
+    console.log(`Backed up ${backup.delegations.length} delegation(s) and ${backup.state?.sessions?.length ?? 0} session(s) → ${path}`);
+    console.log("Credentials are not included (they live in ~/.ahub/credentials.json).");
     return;
   }
   if (command === "init") return init(root);

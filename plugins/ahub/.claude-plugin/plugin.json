@@ -1,6 +1,6 @@
 {
   "name": "ahub",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Configure and coordinate architect, coder, and reviewer agents across Claude Code and Codex.",
   "author": {
     "name": "ahub"

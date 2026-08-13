@@ -6,13 +6,12 @@ import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 
-const VERSION = "0.7.0";
+const VERSION = "0.7.1";
 const DEFAULT_MODEL = "deepseek-v4-flash";
 const MAX_CONTEXT = 60_000;
 const MAX_THREAD_TURNS = 6;     // cap prior turns replayed for thread continuity (bounds token cost)
 const MAX_REPLAY_TASK = 2_000;  // per-turn char caps so huge earlier turns can't blow up the payload
 const MAX_REPLAY_OUTPUT = 8_000;
-const MAX_STORED_CONTEXT = 16_000; // cap host context kept per delegation for export/migration
 const MAX_DELEGATIONS = 500;    // soft cap on the delegation log; compacted past 2x
 
 // Slice by UTF-16 code units but never end on a lone high surrogate (which would emit invalid
@@ -251,6 +250,34 @@ async function writeExportFile(cwd, markdown, options = {}) {
   await mkdir(dir, { recursive: true, mode: 0o700 });
   try { await chmod(dir, 0o700); } catch { /* best-effort */ }
   await writeFile(base, markdown, { mode: 0o600 });
+  try { await chmod(base, 0o600); } catch { /* best-effort */ }
+  return base;
+}
+
+// --- Backup: a lossless, machine-readable snapshot of everything ahub holds locally —
+// delegation history (full context), terminal sessions, and config. Credentials are
+// deliberately NOT included (they live in the owner-only credential store).
+
+async function backupWorkspace(cwd) {
+  const delegations = await readDelegations(cwd, {});
+  const state = await readJson(resolve(cwd, ".ahub", "state.json"));
+  const config = await readJson(resolve(cwd, ".ahub", "config.json"));
+  return {
+    exportedAt: new Date().toISOString(),
+    ahub: VERSION,
+    workspace: cwd,
+    delegations,
+    state,
+    config,
+  };
+}
+
+async function writeBackupFile(cwd, backup, options = {}) {
+  const base = options.out ? resolve(options.out) : resolve(cwd, ".ahub", "backups", `ahub-backup-${Date.now()}.json`);
+  const dir = resolve(base, "..");
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  try { await chmod(dir, 0o700); } catch { /* best-effort */ }
+  await writeFile(base, `${JSON.stringify(backup, null, 2)}\n`, { mode: 0o600 });
   try { await chmod(base, 0o600); } catch { /* best-effort */ }
   return base;
 }
@@ -556,11 +583,12 @@ async function delegate(input, options = {}) {
   const tokens = { prompt: promptTokens, completion: completionTokens, total: usage.total_tokens ?? ((promptTokens ?? 0) + (completionTokens ?? 0)) };
   const costUsd = computeCost(selectedModel.cost, usage);
   // Persist the delegation (task/output/context already redacted) so recall, thread continuity,
-  // and conversation export/migration work.
+  // lossless backup, and handover export all work. Context is stored in full (it is already
+  // bounded by MAX_CONTEXT) so backups are faithful.
   if (config.delegationLog !== false) {
     await appendDelegation(cwd, {
       id: randomUUID(), threadId, model: selectedModel.model, provider: providerName, role: route.role,
-      task, output: text, context: headAndTail(context, MAX_STORED_CONTEXT), contextMode: route.contextMode, contextTruncated,
+      task, output: text, context, contextMode: route.contextMode, contextTruncated,
       streamInterrupted: Boolean(streamInterrupted),
       tokens, estimatedCostUsd: costUsd, elapsedMs, at: new Date().toISOString(),
     }).catch(() => { /* logging is best-effort; never fail a delegation on it */ });
@@ -675,6 +703,20 @@ const tools = [
       additionalProperties: false
     },
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+  },
+  {
+    name: "backup",
+    title: "Back up ahub data (lossless JSON)",
+    description: "Write a lossless JSON snapshot of everything ahub holds locally — delegation history (full context included), terminal sessions, and config — to .ahub/backups/ahub-backup-<ts>.json (owner-only). Credentials are deliberately not included. Use when the user wants to archive or migrate their ahub data; this is the backup counterpart to the Markdown `export` (which is a readable handover document for other AI clients).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Optional destination file path (defaults to .ahub/backups/ahub-backup-<ts>.json)." },
+        workspace: { type: "string", description: "Current workspace path." }
+      },
+      additionalProperties: false
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
   }
 ];
 
@@ -720,6 +762,15 @@ async function callTool(name, input, options = {}) {
     return {
       structuredContent: { path, ...meta },
       content: [{ type: "text", text: `Exported ${meta.turns} turn(s) across ${meta.threads} thread(s) to ${path}. Hand this Markdown file to another AI client as context.` }],
+    };
+  }
+  if (name === "backup") {
+    const cwd = input.workspace ?? process.cwd();
+    const backup = await backupWorkspace(cwd);
+    const path = await writeBackupFile(cwd, backup, { out: input.path });
+    return {
+      structuredContent: { path, exportedAt: backup.exportedAt, delegations: backup.delegations.length, sessions: backup.state?.sessions?.length ?? 0 },
+      content: [{ type: "text", text: `Backed up ${backup.delegations.length} delegation(s) and ${backup.state?.sessions?.length ?? 0} session(s) to ${path}. Credentials are not included.` }],
     };
   }
   if (name === "status") {
@@ -792,4 +843,4 @@ if (process.argv[1] === new URL(import.meta.url).pathname) {
   });
 }
 
-export { buildExportMarkdown, builtins, connectProviderFile, delegate, exportDelegations, handle, redact, renderDelegationMarkdown, resolveShortcuts, writeExportFile };
+export { backupWorkspace, buildExportMarkdown, builtins, connectProviderFile, delegate, exportDelegations, handle, redact, renderDelegationMarkdown, resolveShortcuts, writeBackupFile, writeExportFile };
