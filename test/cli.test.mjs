@@ -606,13 +606,31 @@ test("terminal model menu creates a reusable custom model", async () => {
   const root = await mkdtemp(join(tmpdir(), "ahub-menu-model-"));
   const log = console.log;
   console.log = () => {};
-  const selections = ["models", "add", undefined];
-  const answers = ["fast", "provider-model-fast", "Fast Model"];
-  const prompts = { select: async () => selections.shift(), ask: async () => answers.shift() };
+  const selections = ["models", "add", "custom"];
+  const answers = ["acme", "https://api.acme.example.com", "Acme", "fast", "provider-model-fast", "Fast Model"];
+  const prompts = { select: async () => selections.shift(), ask: async () => answers.shift(), confirm: async () => false };
   try {
     await main(["config"], { root, interactive: true, prompts });
     const config = JSON.parse(await readFile(join(root, ".ahub", "config.json"), "utf8"));
-    assert.deepEqual(config.models.fast, { name: "Fast Model", model: "provider-model-fast", favorite: false, enabled: true });
+    assert.equal(config.providers.acme.baseUrl, "https://api.acme.example.com");
+    assert.deepEqual(config.models.fast, { name: "Fast Model", provider: "acme", model: "provider-model-fast", favorite: false, enabled: true });
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("add-model wizard host-default path sets agents to inherit", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-menu-inherit-"));
+  const log = console.log;
+  console.log = () => {};
+  const selections = ["models", "add", "inherit"];
+  const prompts = { select: async () => selections.shift(), ask: async () => "", confirm: async () => true };
+  try {
+    await main(["config"], { root, interactive: true, prompts });
+    const config = JSON.parse(await readFile(join(root, ".ahub", "config.json"), "utf8"));
+    for (const agent of Object.values(config.agents)) assert.equal(agent.model, "inherit");
+    assert.equal(config.models.fast, undefined);
   } finally {
     console.log = log;
     await rm(root, { recursive: true, force: true });

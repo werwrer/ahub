@@ -342,12 +342,13 @@ async function chooseProviderSource(root, config, prompts, t, options) {
     readiness[key] = Boolean(await getProviderSecret(root, key, options));
   }));
   const source = await prompts.select(t("modelSource"), [
+    { name: t("sourceHostDefault"), value: "inherit" },
+    ...Object.entries(providers).map(([key, conf]) => ({ name: `${conf.label ?? key} · ${conf.baseUrl ?? ""} · ${readiness[key] ? t("connectedShort") : t("notConnectedShort")}`, value: key })),
     { name: t("sourceCatalog"), value: "catalog" },
     { name: t("sourceCustom"), value: "custom" },
-    ...Object.entries(providers).map(([key, conf]) => ({ name: `${conf.label ?? key} · ${conf.baseUrl ?? ""} · ${readiness[key] ? t("connectedShort") : t("notConnectedShort")}`, value: key })),
-    { name: t("hostProvider"), value: undefined },
   ]);
   let providerName;
+  if (source === "inherit") return "inherit"; // host's default model config — no provider at all
   if (source === "catalog") {
     const available = catalogChoices(new Set(Object.keys(providers)));
     if (!available.length) throw new Error(t("allCatalogRegistered"));
@@ -361,7 +362,7 @@ async function chooseProviderSource(root, config, prompts, t, options) {
     providerName = await addCustomProvider(root, config, prompts, t);
     if (!providerName) return undefined;
   } else {
-    providerName = source; // a registered provider, or undefined for the host CLI
+    providerName = source; // an already-registered provider (e.g. DeepSeek)
   }
   if (providerName && !(await getProviderSecret(root, providerName, options))) {
     const label = config.providers?.[providerName]?.label ?? providerName;
@@ -379,6 +380,17 @@ async function setupModelFlow(root, prompts, t, options = {}) {
   const config = await loadConfig(root);
   section(t("addModelWizard"), t("addModelWizardSub"));
   const providerName = await chooseProviderSource(root, config, prompts, t, options);
+  if (providerName === "inherit") {
+    // No model specified → use the host CLI's default configuration for every agent.
+    if (await (prompts.confirm?.(t("setAgentsInherit"), true) ?? true)) {
+      for (const agent of Object.values(config.agents)) agent.model = "inherit";
+      await saveConfig(root, config);
+      success(t("agentsInheritSaved"));
+    }
+    hint(t("hostDefaultHint"));
+    return undefined;
+  }
+  if (providerName === undefined) return undefined; // user cancelled the custom-provider step
   const alias = (await prompts.ask(t("modelAlias"), {
     validate: (value) => { const s = (value ?? "").trim(); return (s && s !== "inherit" && /^[a-z0-9][a-z0-9_-]*$/iu.test(s)) ? true : t("aliasInvalid"); },
   })).trim();
