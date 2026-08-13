@@ -1028,3 +1028,50 @@ test("add-model wizard does provider → key → model → active/assign in one 
     await rm(credentialHome, { recursive: true, force: true });
   }
 });
+
+test("ahub export writes delegation markdown", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-export-cli-"));
+  const log = console.log;
+  const out = [];
+  console.log = (line) => out.push(line);
+  try {
+    await main(["init"], { root });
+    await writeFile(join(root, ".ahub", "delegations.jsonl"), JSON.stringify({
+      id: "e1", threadId: "auth", model: "deepseek-v4-flash", provider: "deepseek", role: "general",
+      task: "design auth", output: "Use rotating tokens.", context: "refresh-token discussion",
+      contextMode: "related", tokens: { total: 120 }, estimatedCostUsd: 0.00001, elapsedMs: 5, at: new Date().toISOString(),
+    }) + "\n");
+    await main(["export"], { root });
+    const pathLine = out.find((line) => /→/u.test(String(line)));
+    assert.ok(pathLine, "export path not printed");
+    const path = String(pathLine).split("→")[1].trim();
+    const markdown = await readFile(path, "utf8");
+    assert.match(markdown, /design auth/u);
+    assert.match(markdown, /refresh-token discussion/u);
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("ahub export --session exports terminal automation runs", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-export-session-"));
+  const log = console.log;
+  const out = [];
+  console.log = (line) => out.push(line);
+  try {
+    await main(["init"], { root });
+    await main(["ask", "coder", "--cli", "mock", "--", "do the thing"], { root });
+    await main(["export", "--session", "main"], { root });
+    const pathLine = out.find((line) => /→/u.test(String(line)));
+    assert.ok(pathLine, "export path not printed");
+    const path = String(pathLine).split("→")[1].trim();
+    const markdown = await readFile(path, "utf8");
+    assert.match(markdown, /do the thing/u);
+    assert.match(markdown, /Mock completed/u);
+    assert.match(markdown, /Session main/u);
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+  }
+});

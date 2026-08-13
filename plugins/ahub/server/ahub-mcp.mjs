@@ -6,12 +6,13 @@ import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 
-const VERSION = "0.6.1";
+const VERSION = "0.7.0";
 const DEFAULT_MODEL = "deepseek-v4-flash";
 const MAX_CONTEXT = 60_000;
 const MAX_THREAD_TURNS = 6;     // cap prior turns replayed for thread continuity (bounds token cost)
 const MAX_REPLAY_TASK = 2_000;  // per-turn char caps so huge earlier turns can't blow up the payload
 const MAX_REPLAY_OUTPUT = 8_000;
+const MAX_STORED_CONTEXT = 16_000; // cap host context kept per delegation for export/migration
 const MAX_DELEGATIONS = 500;    // soft cap on the delegation log; compacted past 2x
 
 // Slice by UTF-16 code units but never end on a lone high surrogate (which would emit invalid
@@ -160,6 +161,98 @@ async function clearDelegations(cwd, { threadId } = {}) {
     await rename(tmp, file);
     return removed;
   });
+}
+
+// --- Conversation migration: render ahub-held conversation turns as a self-contained
+// Markdown document that can be handed to another AI client as context.
+
+// Build a Markdown document from metadata lines and turn sections.
+// sections: [{ heading, blocks: [{ label, content }] }]
+function buildExportMarkdown(meta, sections) {
+  const lines = ["# ahub Conversation Export"];
+  lines.push("");
+  lines.push("> Exported: " + meta.exportedAt);
+  if (meta.workspace) lines.push(`> Workspace: ${meta.workspace}`);
+  if (meta.scope) lines.push(`> Scope: ${meta.scope}`);
+  if (meta.summary) lines.push(`> ${meta.summary}`);
+  lines.push(">");
+  lines.push("> 此文件由 ahub 导出，可直接作为上下文提供给其它 AI 客户端。");
+  lines.push("> This file was exported by ahub and can be fed to other AI clients as context.");
+  for (const section of sections) {
+    lines.push("");
+    lines.push("---");
+    lines.push("");
+    lines.push(`## ${section.heading}`);
+    for (const block of section.blocks) {
+      lines.push("");
+      lines.push(`**${block.label}**`);
+      lines.push("");
+      lines.push(block.content || "*(none)*");
+    }
+  }
+  lines.push("");
+  return lines.join("\n");
+}
+
+function scopeSlug(value) {
+  return String(value).replace(/[^A-Za-z0-9._-]+/gu, "-").replace(/^-+|-+$/gu, "").slice(0, 64) || "export";
+}
+
+// Render delegation entries (all, or one thread) into export markdown.
+function renderDelegationMarkdown(entries, meta) {
+  const threads = {};
+  for (const entry of entries) {
+    (threads[entry.threadId] ??= []).push(entry);
+  }
+  const sections = [];
+  for (const [threadId, turns] of Object.entries(threads)) {
+    const first = turns[0] ?? {};
+    sections.push({
+      heading: `Thread ${threadId}`,
+      blocks: [
+        { label: "Model", content: `${first.model ?? ""} · provider ${first.provider ?? ""}` },
+        ...turns.flatMap((entry, index) => [
+          { label: `Turn ${index + 1} — ${entry.at ?? ""} · context: ${entry.contextMode ?? "related"}`, content: `${String(entry.task ?? "")}` },
+          { label: "Host context shared with the model", content: entry.context || "" },
+          { label: "Assistant", content: String(entry.output ?? "") },
+        ]),
+      ],
+    });
+  }
+  return buildExportMarkdown(meta, sections);
+}
+
+function exportMeta(entries, extra = {}) {
+  const totalTokens = entries.reduce((sum, entry) => sum + (entry.tokens?.total ?? 0), 0);
+  const totalCostUsd = entries.reduce((sum, entry) => sum + (Number(entry.estimatedCostUsd) || 0), 0);
+  const threads = new Set(entries.map((entry) => entry.threadId)).size;
+  return {
+    exportedAt: new Date().toISOString(),
+    threads,
+    turns: entries.length,
+    totalTokens,
+    totalCostUsd: Number(totalCostUsd.toFixed(6)),
+    summary: `Threads: ${threads} · Turns: ${entries.length} · Total tokens: ${totalTokens} · Est. cost: $${Number(totalCostUsd.toFixed(6))}`,
+    ...extra,
+  };
+}
+
+async function exportDelegations(cwd, { threadId } = {}) {
+  const entries = await readDelegations(cwd, { threadId });
+  if (!entries.length) throw new Error(threadId ? `No delegations recorded for thread ${threadId} in this workspace.` : "No delegations recorded in this workspace.");
+  const meta = exportMeta(entries, { workspace: cwd, scope: threadId ? `thread ${threadId}` : "all delegation threads" });
+  return { markdown: renderDelegationMarkdown(entries, meta), meta, entries };
+}
+
+// Write an export document to <cwd>/.ahub/exports/ (owner-only) and return the path.
+async function writeExportFile(cwd, markdown, options = {}) {
+  const base = options.out ? resolve(options.out) : resolve(cwd, ".ahub", "exports", `ahub-export-${scopeSlug(options.scope)}-${Date.now()}.md`);
+  const dir = resolve(base, "..");
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  try { await chmod(dir, 0o700); } catch { /* best-effort */ }
+  await writeFile(base, markdown, { mode: 0o600 });
+  try { await chmod(base, 0o600); } catch { /* best-effort */ }
+  return base;
 }
 
 // Validate a key against a provider's /models endpoint (kept inline — the MCP server is standalone).
@@ -462,11 +555,12 @@ async function delegate(input, options = {}) {
   const completionTokens = usage.completion_tokens ?? usage.output_tokens;
   const tokens = { prompt: promptTokens, completion: completionTokens, total: usage.total_tokens ?? ((promptTokens ?? 0) + (completionTokens ?? 0)) };
   const costUsd = computeCost(selectedModel.cost, usage);
-  // Persist the delegation (task/output already redacted) so recall and thread continuity work.
+  // Persist the delegation (task/output/context already redacted) so recall, thread continuity,
+  // and conversation export/migration work.
   if (config.delegationLog !== false) {
     await appendDelegation(cwd, {
       id: randomUUID(), threadId, model: selectedModel.model, provider: providerName, role: route.role,
-      task, output: text, contextMode: route.contextMode, contextTruncated,
+      task, output: text, context: headAndTail(context, MAX_STORED_CONTEXT), contextMode: route.contextMode, contextTruncated,
       streamInterrupted: Boolean(streamInterrupted),
       tokens, estimatedCostUsd: costUsd, elapsedMs, at: new Date().toISOString(),
     }).catch(() => { /* logging is best-effort; never fail a delegation on it */ });
@@ -566,6 +660,21 @@ const tools = [
       additionalProperties: false
     },
     annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
+  },
+  {
+    name: "export",
+    title: "Export conversation to Markdown",
+    description: "Export ahub-held conversation history (delegation threads — tasks, shared host context, and answers) into a self-contained Markdown file the user can hand to another AI client as context. By default exports every thread; pass a threadId for one thread. The file is written under .ahub/exports/ (owner-only) and the path is returned. ahub never reads the host's transcript — this exports only what ahub itself recorded.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        threadId: { type: "string", description: "If given, export only this thread; otherwise export all threads." },
+        path: { type: "string", description: "Optional destination file path (defaults to .ahub/exports/ahub-export-<scope>-<ts>.md)." },
+        workspace: { type: "string", description: "Current workspace path." }
+      },
+      additionalProperties: false
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
   }
 ];
 
@@ -602,6 +711,15 @@ async function callTool(name, input, options = {}) {
     return {
       structuredContent: { removed },
       content: [{ type: "text", text: removed ? `Forgot ${removed} delegation(s) from ${what} in this workspace.` : `Nothing to forget for ${what} in this workspace.` }],
+    };
+  }
+  if (name === "export") {
+    const cwd = input.workspace ?? process.cwd();
+    const { markdown, meta } = await exportDelegations(cwd, { threadId: input.threadId });
+    const path = await writeExportFile(cwd, markdown, { out: input.path, scope: input.threadId ?? "all-threads" });
+    return {
+      structuredContent: { path, ...meta },
+      content: [{ type: "text", text: `Exported ${meta.turns} turn(s) across ${meta.threads} thread(s) to ${path}. Hand this Markdown file to another AI client as context.` }],
     };
   }
   if (name === "status") {
@@ -674,4 +792,4 @@ if (process.argv[1] === new URL(import.meta.url).pathname) {
   });
 }
 
-export { builtins, connectProviderFile, delegate, handle, redact, resolveShortcuts };
+export { buildExportMarkdown, builtins, connectProviderFile, delegate, exportDelegations, handle, redact, renderDelegationMarkdown, resolveShortcuts, writeExportFile };

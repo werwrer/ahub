@@ -9,7 +9,7 @@ test("MCP server advertises host-context delegation tools", async () => {
   const initialized = await handle({ method: "initialize", params: { protocolVersion: "2025-06-18" } });
   const listed = await handle({ method: "tools/list" });
   assert.equal(initialized.serverInfo.name, "ahub");
-  assert.deepEqual(listed.tools.map((tool) => tool.name), ["delegate", "status", "connect", "recall", "forget"]);
+  assert.deepEqual(listed.tools.map((tool) => tool.name), ["delegate", "status", "connect", "recall", "forget", "export"]);
   assert.match(listed.tools[0].description, /host.*context/iu);
 });
 
@@ -618,6 +618,71 @@ test("forget clears all history or a single thread", async () => {
     assert.equal(all.structuredContent.removed, 1);
     const empty = await handle({ method: "tools/call", params: { name: "recall", arguments: { workspace } } });
     assert.equal(empty.structuredContent.count, 0);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+    await rm(credentialHome, { recursive: true, force: true });
+  }
+});
+
+test("export writes conversation markdown with tasks, context, and answers", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "ahub-mcp-export-"));
+  const credentialHome = await mkdtemp(join(tmpdir(), "ahub-mcp-export-home-"));
+  await mkdir(join(workspace, ".ahub"), { recursive: true });
+  await mkdir(join(credentialHome, ".ahub"), { recursive: true });
+  await writeFile(join(workspace, ".ahub", "config.json"), JSON.stringify({ models: { ds4f: { provider: "deepseek", model: "x" } } }));
+  await writeFile(join(credentialHome, ".ahub", "credentials.json"), JSON.stringify({ deepseek: { apiKey: "k" } }));
+  try {
+    await delegate({ task: "design auth", context: "The host discussed refresh tokens.", workspace, threadId: "auth" }, { credentialHome, fetch: () => jsonDelegateReply("Use rotating refresh tokens.") });
+    await delegate({ task: "review it", context: "Previous answer: rotating tokens.", workspace, threadId: "auth" }, { credentialHome, fetch: () => jsonDelegateReply("Looks good.") });
+    const response = await handle({ method: "tools/call", params: { name: "export", arguments: { workspace } } });
+    assert.equal(response.structuredContent.turns, 2);
+    assert.equal(response.structuredContent.threads, 1);
+    const markdown = await readFile(response.structuredContent.path, "utf8");
+    assert.match(markdown, /# ahub Conversation Export/u);
+    assert.match(markdown, /design auth/u);
+    assert.match(markdown, /refresh tokens/u);
+    assert.match(markdown, /Use rotating refresh tokens/u);
+    assert.match(markdown, /Host context shared with the model/u);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+    await rm(credentialHome, { recursive: true, force: true });
+  }
+});
+
+test("export filters to a single thread", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "ahub-mcp-export-filter-"));
+  const credentialHome = await mkdtemp(join(tmpdir(), "ahub-mcp-export-filter-home-"));
+  await mkdir(join(workspace, ".ahub"), { recursive: true });
+  await mkdir(join(credentialHome, ".ahub"), { recursive: true });
+  await writeFile(join(workspace, ".ahub", "config.json"), JSON.stringify({ models: { ds4f: { provider: "deepseek", model: "x" } } }));
+  await writeFile(join(credentialHome, ".ahub", "credentials.json"), JSON.stringify({ deepseek: { apiKey: "k" } }));
+  try {
+    await delegate({ task: "task-a", workspace, threadId: "t1" }, { credentialHome, fetch: () => jsonDelegateReply("answer-a") });
+    await delegate({ task: "task-b", workspace, threadId: "t2" }, { credentialHome, fetch: () => jsonDelegateReply("answer-b") });
+    const response = await handle({ method: "tools/call", params: { name: "export", arguments: { workspace, threadId: "t1" } } });
+    assert.equal(response.structuredContent.turns, 1);
+    const markdown = await readFile(response.structuredContent.path, "utf8");
+    assert.match(markdown, /task-a/u);
+    assert.doesNotMatch(markdown, /task-b/u);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+    await rm(credentialHome, { recursive: true, force: true });
+  }
+});
+
+test("delegation log caps stored context for export", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "ahub-mcp-contextcap-"));
+  const credentialHome = await mkdtemp(join(tmpdir(), "ahub-mcp-contextcap-home-"));
+  await mkdir(join(workspace, ".ahub"), { recursive: true });
+  await mkdir(join(credentialHome, ".ahub"), { recursive: true });
+  await writeFile(join(workspace, ".ahub", "config.json"), JSON.stringify({ models: { ds4f: { provider: "deepseek", model: "x" } } }));
+  await writeFile(join(credentialHome, ".ahub", "credentials.json"), JSON.stringify({ deepseek: { apiKey: "k" } }));
+  try {
+    await delegate({ task: "t", context: "c".repeat(30_000), workspace }, { credentialHome, fetch: () => jsonDelegateReply("ok") });
+    const log = await readFile(join(workspace, ".ahub", "delegations.jsonl"), "utf8");
+    const entry = JSON.parse(log.trim().split("\n")[0]);
+    assert.ok(entry.context.length < 18_000, `stored context too large: ${entry.context.length}`);
+    assert.match(entry.context, /characters elided/u);
   } finally {
     await rm(workspace, { recursive: true, force: true });
     await rm(credentialHome, { recursive: true, force: true });

@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-当前版本：**0.6.1**
+当前版本：**0.7.0**
 
 在 Codex 或 Claude Code 里使用 DeepSeek 及其它模型，不丢失当前对话的上下文。
 
@@ -17,6 +17,7 @@ ahub 是一个双语本地控制中心和插件，负责模型路由、智能体
 - **上下文范围明确** — 可选 `brief`、`related`、`full`、`fresh`；共享完整上下文前必须确认。超过 6 万字符的上下文会被截断，并明确告知模型它只看到了部分内容。
 - **委派鲁棒且透明** — 宿主支持时回答按 token 流式返回；每次调用都有超时，对限流和临时错误自动重试一次，并回传 token 用量与估算费用。常见密钥串（API key、AWS/Google/Slack/GitHub token、JWT、Bearer）会在上下文离开宿主前被抹除。
 - **多轮委派线程** — 被委派的模型可以跨轮次续接（`threadId` / `continue`），只基于自己之前的回答；宿主可用 `recall` 取回它说过的话。委派记录保存在本地（已 gitignore、仅所有者可读；用 `delegationLog: false` 可关闭）。
+- **对话迁移** — 把委派线程（或终端会话）导出为自包含的 Markdown 文件——任务、共享上下文和回答——交给其它 AI 客户端继续使用。宿主内用 `export` 工具；终端用 `ahub export [<threadId>] [--session <name>]`。
 - **同时支持 Codex 与 Claude Code** — 可以只安装一个，也可以同时安装。
 - **安全角色预设** — Architect 只分析，Coder 实现并测试，Reviewer 进行独立只读审查。
 

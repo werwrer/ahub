@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.0 — 2026-08-13
+
+- **Conversation migration (export to Markdown)**: export ahub-held conversations into a self-contained Markdown document — tasks, the shared host context, and answers per turn, with model/token/cost metadata — ready to hand to another AI client (ChatGPT, Cursor, …). In-app via the new `export` MCP tool (optionally per `threadId`); from the terminal via `ahub export [<threadId>] [--session <name>] [--out <path>]`, which also exports terminal automation sessions. Files land in `.ahub/exports/` (owner-only, gitignored). To support this, each delegation now also stores the (redacted, capped) host context.
+
 ## 0.6.1 — 2026-08-13
 
 - **Terminal-native interaction redesign**: the control center now renders a live status dashboard (agents, provider readiness, active model) above every action, and adding a model is a **one-pass wizard** — pick the provider (catalog / custom / registered providers listed inline with ●/○ connection state / host CLI), fill the key if needed, name the model, then optionally set it active and assign an agent. Replaces the old six-level menu drill-down.

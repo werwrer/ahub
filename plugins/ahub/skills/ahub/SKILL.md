@@ -50,7 +50,9 @@ By default each `delegate` is stateless. To make a delegated model **continue ac
 - **Recall what it said**: call `recall` (optionally with a `threadId`) to retrieve prior delegations from ahub's local memory — the host's way to obtain the sub-agent's context. Use it before re-invoking, or when the user asks "what did DeepSeek say earlier".
 - **Proactively re-invoke**: when a later step needs the same model to refine/extend earlier work, call `delegate` again with the same `threadId` (or `continue: true`) plus the new task. Don't re-summarize the whole history yourself — the thread already carries it.
 
-Delegations are stored locally in `.ahub/delegations.jsonl` (gitignored, owner-only; task/output are already redacted). Users can disable logging with `delegationLog: false` in config. Use the `forget` tool only when the user explicitly asks to clear delegation history or delete a thread. When you continue a thread, tell the user briefly that the model is resuming prior context.
+Delegations are stored locally in `.ahub/delegations.jsonl` (gitignored, owner-only; task/output/context are already redacted and context is capped). Users can disable logging with `delegationLog: false` in config. Use the `forget` tool only when the user explicitly asks to clear delegation history or delete a thread. When you continue a thread, tell the user briefly that the model is resuming prior context.
+
+To migrate a conversation to another AI client, call the `export` tool (optionally with a `threadId`): it writes a self-contained Markdown document — tasks, the shared host context, and answers — under `.ahub/exports/` and returns the path. Tell the user where the file is and that they can feed it to ChatGPT, Cursor, or another agent as context. The export covers only what ahub recorded (its own delegations), never the host's full transcript.
 
 ## Shortcuts
 

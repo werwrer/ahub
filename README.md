@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Current version: **0.6.1**
+Current version: **0.7.0**
 
 Use DeepSeek and other models inside Codex or Claude Code without losing the context of your current conversation.
 
@@ -17,6 +17,7 @@ ahub is a bilingual local control center and plugin for model routing, agent rol
 - **Explicit context control** — choose `brief`, `related`, `full`, or `fresh`; full-context sharing requires confirmation. Context over 60k characters is truncated and the model is told it received a partial view.
 - **Resilient & transparent delegation** — answers stream token-by-token where the host supports it; every call has a timeout, retries once on rate limits and transient errors, and reports token usage and estimated cost. Secret patterns (API keys, AWS/Google/Slack/GitHub tokens, JWTs, Bearer tokens) are scrubbed before context leaves the host.
 - **Multi-turn delegation threads** — a delegated model can continue across turns (`threadId` / `continue`) using only its own prior answers, and the host can `recall` what it said. Delegations are logged locally (gitignored, owner-only; disable with `delegationLog: false`).
+- **Conversation migration** — export a delegation thread (or a terminal session) into a self-contained Markdown file — tasks, shared context, and answers — to hand to another AI client. In-app via the `export` tool; from the terminal via `ahub export [<threadId>] [--session <name>]`.
 - **Codex and Claude Code** — install either integration or both.
 - **Safe roles** — architect analyzes, coder implements, and reviewer performs an independent read-only review.
 

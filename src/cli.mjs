@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_CONFIG, fallbackActiveModel, loadConfig, modelChoices, modelLabel, resolveAgent, resolveConfiguredModel, resolveProfileCommand, saveConfig } from "./config.mjs";
 import { PROVIDER_CATALOG, catalogChoices, catalogEntry } from "./catalog.mjs";
+import { buildExportMarkdown, exportDelegations, writeExportFile } from "../plugins/ahub/server/ahub-mcp.mjs";
 import { compileContext } from "./context.mjs";
 import { commandVersion, runRuntime } from "./runtimes.mjs";
 import { getProviderCredential, getProviderSecret, loadSecrets, readHidden, removeProviderSecret, setProviderSecret } from "./secrets.mjs";
@@ -40,6 +41,7 @@ Automation and advanced commands:
   ahub provider catalog
   ahub provider list
   ahub provider remove <name>
+  ahub export [<threadId>] [--session <name>] [--out <path>]
   ahub agent list
   ahub agent set <agent> <cli|model> <value>
   ahub command list
@@ -694,7 +696,7 @@ async function onboarding(root, config, available, options = {}) {
   const t = translator(language);
   if (!options.quietUi) {
     clearScreen();
-    banner("0.6.1", t("tagline"));
+    banner("0.7.0", t("tagline"));
     section(t("quick1"), t("quick1Sub"));
   }
   const choices = [];
@@ -745,7 +747,7 @@ async function init(root) {
   await mkdir(target.dir, { recursive: true });
   await saveState(root, emptyState());
   await saveConfig(root, DEFAULT_CONFIG);
-  await writeFile(resolve(target.dir, ".gitignore"), "state.json\nsecrets.json\ndelegations.jsonl\n*.tmp\n");
+  await writeFile(resolve(target.dir, ".gitignore"), "state.json\nsecrets.json\ndelegations.jsonl\nexports/\n*.tmp\n");
   console.log(`Initialized ahub in ${target.dir}`);
 }
 
@@ -813,7 +815,7 @@ export async function main(argv, options = {}) {
     const t = translator(config.ui?.language ?? inferLanguage());
     if (!options.quietUi) {
       clearScreen();
-      banner("0.6.1", t("tagline"));
+      banner("0.7.0", t("tagline"));
       hint(`${t("project")}  ${root}`);
     }
     return controlCenter(root, options);
@@ -1121,6 +1123,36 @@ export async function main(argv, options = {}) {
       await installPlugin("claude", options);
       await installPlugin("codex", options);
     } else await installPlugin(subcommand, options);
+    return;
+  }
+  if (command === "export") {
+    if (!(await exists(paths(root).state))) await init(root);
+    // Flags may appear in the subcommand position (`ahub export --session main`), so scan both.
+    const allArgs = [subcommand, ...rest].filter((arg) => arg !== undefined);
+    const positional = withoutFlags(allArgs, ["--session", "--out"]);
+    const threadId = positional[0];
+    const sessionName = flag(allArgs, "--session", undefined);
+    const out = flag(allArgs, "--out", undefined);
+    if (sessionName) {
+      // Export a terminal automation session (tasks and results from state.json).
+      const session = findSession(await loadState(root), sessionName);
+      const meta = { exportedAt: new Date().toISOString(), workspace: root, scope: `session ${session.name}`, summary: `Runs: ${session.runs.length}` };
+      const sections = [{
+        heading: `Session ${session.name}`,
+        blocks: session.runs.flatMap((run, index) => [
+          { label: `Run ${index + 1} — ${run.runtime ?? ""}${run.agent ? ` / ${run.agent}` : ""}${run.model ? ` · ${run.model}` : ""} · ${run.status ?? "completed"} · ${run.startedAt ?? ""}`, content: String(run.task ?? "") },
+          { label: "Output", content: String(run.output ?? "") },
+        ]),
+      }];
+      const markdown = buildExportMarkdown(meta, sections);
+      const path = await writeExportFile(root, markdown, { out, scope: `session-${session.name}` });
+      console.log(`Exported session ${session.name} (${session.runs.length} run(s)) → ${path}`);
+      return;
+    }
+    // Export @ahub delegation threads (tasks, shared context, answers) from delegations.jsonl.
+    const { markdown, meta } = await exportDelegations(root, { threadId });
+    const path = await writeExportFile(root, markdown, { out, scope: threadId ?? "all-threads" });
+    console.log(`Exported ${meta.turns} turn(s) across ${meta.threads} thread(s) → ${path}`);
     return;
   }
   if (command === "init") return init(root);
