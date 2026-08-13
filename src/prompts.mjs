@@ -2,13 +2,15 @@ import { createInterface } from "node:readline/promises";
 import { createPromptModule } from "inquirer";
 
 function normalizeError(error) {
-  if (error?.name === "ExitPromptError" || error?.name === "AbortPromptError" || error?.name === "CancelPromptError") {
+  if (error?.name === "ExitPromptError") throw Object.assign(new Error("exit"), { code: "EXIT" });
+  if (error?.name === "AbortPromptError" || error?.name === "CancelPromptError") {
     throw Object.assign(new Error("cancelled"), { code: "CANCELLED" });
   }
   throw error;
 }
 
-// Esc (or Ctrl+C) in a menu navigates back: resolve to the choice that is a back/exit item.
+// Esc navigates back: resolve to the choice that is a back/exit item.
+// Ctrl+C (EXIT code) propagates up to terminate the program.
 const BACK_VALUES = ["back", "exit", "__back__"];
 function cancelFallback(choices) {
   for (const key of BACK_VALUES) {
@@ -21,6 +23,7 @@ async function guardBack(runPromise, choices) {
   try {
     return await runPromise;
   } catch (error) {
+    if (error?.code === "EXIT") throw error; // Ctrl+C = exit, never swallow
     if (error?.code !== "CANCELLED") throw error;
     const back = cancelFallback(choices);
     if (back !== undefined) return back;

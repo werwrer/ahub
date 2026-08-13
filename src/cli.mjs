@@ -699,9 +699,8 @@ async function controlCenter(root, options = {}) {
         await main(args, { ...options, root, interactive: false });
       }
     } catch (error) {
-      // Esc anywhere without a closer back item lands here: silently return to the menu.
-      if (error?.code === "CANCELLED") continue;
-      // Keep the menu alive: surface the failure and loop back instead of dying with a stack trace.
+      if (error?.code === "EXIT") return;   // Ctrl+C = exit the program
+      if (error?.code === "CANCELLED") continue; // Esc = back to menu
       warning(t("menuActionFailed", { error: error.message }));
     }
   } while (repeat);
@@ -839,7 +838,7 @@ export async function main(argv, options = {}) {
     try {
       return await controlCenter(root, options);
     } catch (error) {
-      if (error?.code === "CANCELLED") return; // Esc at the top level exits cleanly
+      if (error?.code === "EXIT" || error?.code === "CANCELLED") return;
       throw error;
     }
   }
@@ -855,7 +854,7 @@ export async function main(argv, options = {}) {
       if (firstSetup && interactive) await onboarding(root, config, { claude, codex }, options);
       else if (firstSetup && onlyAvailableCli) await onboarding(root, config, { claude, codex }, { ...options, prompts: { select: async (_message, choices) => choices[0].value } });
     } catch (error) {
-      if (error?.code === "CANCELLED") return; // Esc during setup exits cleanly
+      if (error?.code === "EXIT" || error?.code === "CANCELLED") return;
       throw error;
     }
     console.log("\nahub is ready.\n");
