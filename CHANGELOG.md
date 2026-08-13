@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.1 — 2026-08-13
+
+- Docs: rewrote `README.zh-CN.md` as a complete, section-for-section mirror of the English README (it had drifted and was missing the context-modes, configuration, current-scope, and local-development sections).
+
 ## 0.5.0 — 2026-08-13
 
 A major product upgrade: any model actually works, delegation is resilient and multi-turn, and the terminal menu survives real use.

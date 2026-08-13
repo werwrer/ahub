@@ -593,7 +593,7 @@ async function onboarding(root, config, available, options = {}) {
   const t = translator(language);
   if (!options.quietUi) {
     clearScreen();
-    banner("0.5.0", t("tagline"));
+    banner("0.5.1", t("tagline"));
     section(t("quick1"), t("quick1Sub"));
   }
   const choices = [];
@@ -712,7 +712,7 @@ export async function main(argv, options = {}) {
     const t = translator(config.ui?.language ?? inferLanguage());
     if (!options.quietUi) {
       clearScreen();
-      banner("0.5.0", t("tagline"));
+      banner("0.5.1", t("tagline"));
       hint(`${t("project")}  ${root}`);
     }
     return controlCenter(root, options);
