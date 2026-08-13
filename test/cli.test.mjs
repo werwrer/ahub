@@ -318,7 +318,7 @@ test("first setup uses the only installed CLI for every agent", async () => {
   }
 });
 
-test("model configuration rejects providers that are not implemented", async () => {
+test("model configuration rejects unregistered providers", async () => {
   const root = await mkdtemp(join(tmpdir(), "ahub-provider-"));
   const log = console.log;
   console.log = () => {};
@@ -326,7 +326,7 @@ test("model configuration rejects providers that are not implemented", async () 
     await main(["init"], { root });
     await assert.rejects(
       () => main(["model", "set", "fast", "model-x", "--provider", "unknown"], { root }),
-      /unsupported provider/u,
+      /unknown provider/u,
     );
     const config = JSON.parse(await readFile(join(root, ".ahub", "config.json"), "utf8"));
     assert.equal(config.models.fast, undefined);
@@ -606,13 +606,13 @@ test("terminal model menu creates a reusable custom model", async () => {
   const root = await mkdtemp(join(tmpdir(), "ahub-menu-model-"));
   const log = console.log;
   console.log = () => {};
-  const selections = ["models", "custom"];
-  const answers = ["fast", "provider-model-fast"];
+  const selections = ["models", "add", undefined];
+  const answers = ["fast", "provider-model-fast", "Fast Model"];
   const prompts = { select: async () => selections.shift(), ask: async () => answers.shift() };
   try {
     await main(["config"], { root, interactive: true, prompts });
     const config = JSON.parse(await readFile(join(root, ".ahub", "config.json"), "utf8"));
-    assert.deepEqual(config.models.fast, { model: "provider-model-fast" });
+    assert.deepEqual(config.models.fast, { name: "Fast Model", model: "provider-model-fast", favorite: false, enabled: true });
   } finally {
     console.log = log;
     await rm(root, { recursive: true, force: true });
@@ -630,6 +630,48 @@ test("terminal shortcut menu creates a reusable host-context preset", async () =
     await main([], { root, interactive: true, prompts });
     const config = JSON.parse(await readFile(join(root, ".ahub", "config.json"), "utf8"));
     assert.deepEqual(config.shortcuts["/省钱审查"], { model: "ds4f", contextMode: "related", role: "reviewer" });
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("model library manages many models without turning every menu into a long list", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-model-library-"));
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await main(["init"], { root });
+    for (let index = 1; index <= 12; index += 1) await main(["model", "set", `model${index}`, `provider-model-${index}`], { root });
+    const configPath = join(root, ".ahub", "config.json");
+    let config = JSON.parse(await readFile(configPath, "utf8"));
+    config.models.model12.name = "Favorite Twelve";
+    config.models.model12.favorite = true;
+    config.models.model2.enabled = false;
+    await writeFile(configPath, JSON.stringify(config));
+    const loaded = await import("../src/config.mjs");
+    const choices = loaded.modelChoices(await loaded.loadConfig(root));
+    assert.equal(choices[0].value, "ds4f");
+    assert.equal(choices[1].value, "model12");
+    assert.equal(choices.some((choice) => choice.value === "model2"), false);
+    assert.equal(choices.length, 12);
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("host CLI models cannot become an invalid direct-delegation default", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-model-default-"));
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await main(["init"], { root });
+    await main(["model", "set", "claudehost", "claude-sonnet"], { root });
+    await assert.rejects(() => main(["model", "default", "claudehost"], { root }), /directly delegatable/u);
+    await assert.rejects(() => main(["shortcut", "set", "/host", "--model", "claudehost"], { root }), /direct delegation/u);
+    const config = JSON.parse(await readFile(join(root, ".ahub", "config.json"), "utf8"));
+    assert.equal(config.defaults.externalModel, "ds4f");
   } finally {
     console.log = log;
     await rm(root, { recursive: true, force: true });
@@ -689,5 +731,191 @@ test("first interactive setup stores the selected interface language", async () 
     process.env.PATH = previousPath;
     await rm(root, { recursive: true, force: true });
     await rm(fakeBin, { recursive: true, force: true });
+  }
+});
+
+test("provider add/list/remove manage the provider registry", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-provider-reg-"));
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await main(["init"], { root });
+    await main(["provider", "add", "acme", "https://api.acme.example.com/", "--label", "Acme"], { root });
+    let config = JSON.parse(await readFile(join(root, ".ahub", "config.json"), "utf8"));
+    assert.equal(config.providers.acme.baseUrl, "https://api.acme.example.com");
+    assert.equal(config.providers.acme.label, "Acme");
+    assert.equal(config.providers.deepseek.label, "DeepSeek");
+    // a model can now use the newly registered provider
+    await main(["model", "set", "fast", "acme-fast", "--provider", "acme"], { root });
+    config = JSON.parse(await readFile(join(root, ".ahub", "config.json"), "utf8"));
+    assert.equal(config.models.fast.provider, "acme");
+    // the built-in deepseek provider cannot be removed
+    await assert.rejects(() => main(["provider", "remove", "deepseek"], { root }), /cannot be removed/u);
+    // a provider still referenced by a model cannot be removed
+    await assert.rejects(() => main(["provider", "remove", "acme"], { root }), /used by models/u);
+    await main(["model", "remove", "fast"], { root });
+    await main(["provider", "remove", "acme"], { root });
+    config = JSON.parse(await readFile(join(root, ".ahub", "config.json"), "utf8"));
+    assert.equal(config.providers.acme, undefined);
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("active model can be set to any provider-backed model", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-active-model-"));
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await main(["init"], { root });
+    await main(["provider", "add", "acme", "https://api.acme.example.com"], { root });
+    await main(["model", "set", "fast", "acme-fast", "--provider", "acme"], { root });
+    await main(["model", "default", "fast"], { root });
+    const config = JSON.parse(await readFile(join(root, ".ahub", "config.json"), "utf8"));
+    assert.equal(config.defaults.activeModel, "fast");
+    assert.equal(config.defaults.externalModel, "fast");
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("auth set connects any registered provider", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-auth-multi-"));
+  const credentialHome = await mkdtemp(join(tmpdir(), "ahub-auth-multi-home-"));
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await main(["init"], { root });
+    await main(["provider", "add", "acme", "https://api.acme.example.com"], { root });
+    await main(["auth", "set", "acme"], {
+      root,
+      credentialHome,
+      validateCredential: async () => ({ ok: true }),
+      readSecret: async () => "acme-key",
+    });
+    const creds = JSON.parse(await readFile(join(credentialHome, ".ahub", "credentials.json"), "utf8"));
+    assert.equal(creds.acme.apiKey, "acme-key");
+    assert.equal(creds.deepseek, undefined);
+    // an unregistered provider is rejected with guidance
+    await assert.rejects(() => main(["auth", "set", "nope"], { root }), /usage: ahub auth set/u);
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+    await rm(credentialHome, { recursive: true, force: true });
+  }
+});
+
+test("config view shows a context-window hint for models that declare one", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-ctx-window-"));
+  const log = console.log;
+  const out = [];
+  console.log = (msg) => out.push(msg);
+  try {
+    await main(["init"], { root });
+    await main(["model", "set", "big", "big-model"], { root });
+    const cfgPath = join(root, ".ahub", "config.json");
+    const cfg = JSON.parse(await readFile(cfgPath, "utf8"));
+    cfg.models.big.contextWindow = 200000;
+    await writeFile(cfgPath, JSON.stringify(cfg));
+    await main(["config", "--show"], { root });
+    assert.ok(out.some((line) => /200k ctx/u.test(String(line))), "context window hint not shown");
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("model set merges into an existing alias instead of wiping provider/name", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-model-set-merge-"));
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await main(["init"], { root });
+    await main(["provider", "add", "acme", "https://api.acme.example.com"], { root });
+    await main(["model", "set", "fast", "acme-fast", "--provider", "acme"], { root });
+    // Re-setting only the model ID must preserve provider/name/favorite.
+    await main(["model", "set", "fast", "acme-fast-v2"], { root });
+    let config = JSON.parse(await readFile(join(root, ".ahub", "config.json"), "utf8"));
+    assert.equal(config.models.fast.model, "acme-fast-v2");
+    assert.equal(config.models.fast.provider, "acme");
+    // ds4f's provider cannot be changed away from deepseek.
+    await assert.rejects(() => main(["model", "set", "ds4f", "other-model", "--provider", "acme"], { root }), /deepseek provider/u);
+    // but changing ds4f's model id without --provider is allowed and keeps deepseek.
+    await main(["model", "set", "ds4f", "deepseek-v4-flash"], { root });
+    config = JSON.parse(await readFile(join(root, ".ahub", "config.json"), "utf8"));
+    assert.equal(config.models.ds4f.provider, "deepseek");
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("terminal ask refuses a non-deepseek external provider with an actionable error", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-ask-external-"));
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await main(["init"], { root });
+    await main(["provider", "add", "acme", "https://api.acme.example.com"], { root });
+    await main(["model", "set", "fast", "acme-fast", "--provider", "acme"], { root });
+    await assert.rejects(
+      () => main(["ask", "coder", "--model", "fast", "--", "do something"], { root }),
+      /delegate provider 'acme' from the host via @ahub/u,
+    );
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("hiding or removing the active model reassigns it to a usable one", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-active-guard-"));
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await main(["init"], { root });
+    await main(["provider", "add", "acme", "https://api.acme.example.com"], { root });
+    await main(["model", "set", "fast", "acme-fast", "--provider", "acme"], { root });
+    await main(["model", "set", "slow", "acme-slow", "--provider", "acme"], { root });
+    await main(["model", "default", "fast"], { root });
+    // hiding the active model must not leave the active model unusable
+    await main(["model", "hide", "fast"], { root });
+    let config = JSON.parse(await readFile(join(root, ".ahub", "config.json"), "utf8"));
+    assert.equal(config.models.fast.enabled, false);
+    assert.notEqual(config.defaults.activeModel, "fast");
+    assert.ok(config.models[config.defaults.activeModel]?.provider, "active model is still delegatable");
+    assert.notEqual(config.models[config.defaults.activeModel].enabled, false, "active model is still visible");
+    // removing the active model reassigns again (make a removable model active first)
+    await main(["model", "default", "slow"], { root });
+    await main(["model", "remove", "slow"], { root });
+    config = JSON.parse(await readFile(join(root, ".ahub", "config.json"), "utf8"));
+    assert.equal(config.models.slow, undefined);
+    assert.notEqual(config.defaults.activeModel, "slow");
+    assert.ok(config.models[config.defaults.activeModel]?.provider || config.defaults.activeModel === "ds4f");
+  } finally {
+    console.log = log;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("control center recovers from a failed action instead of dying with a stack trace", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ahub-menu-recover-"));
+  const emptyBin = await mkdtemp(join(tmpdir(), "ahub-menu-empty-bin-"));
+  const previousPath = process.env.PATH;
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await main(["init"], { root });
+    process.env.PATH = emptyBin; // no claude/codex binaries → install action must fail cleanly
+    const selections = ["install", "exit"];
+    const prompts = { select: async () => selections.shift(), ask: async () => "task", confirm: async () => true, interactive: true };
+    await main([], { root, interactive: true, prompts }); // must not throw; loops back and exits
+  } finally {
+    console.log = log;
+    process.env.PATH = previousPath;
+    await rm(root, { recursive: true, force: true });
+    await rm(emptyBin, { recursive: true, force: true });
   }
 });

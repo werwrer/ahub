@@ -1,11 +1,11 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_CONFIG, loadConfig, resolveAgent, resolveConfiguredModel, resolveProfileCommand, saveConfig } from "./config.mjs";
+import { DEFAULT_CONFIG, fallbackActiveModel, loadConfig, modelChoices, modelLabel, resolveAgent, resolveConfiguredModel, resolveProfileCommand, saveConfig } from "./config.mjs";
 import { compileContext } from "./context.mjs";
 import { commandVersion, runRuntime } from "./runtimes.mjs";
 import { getProviderCredential, getProviderSecret, loadSecrets, readHidden, removeProviderSecret, setProviderSecret } from "./secrets.mjs";
-import { validateDeepSeekCredential } from "./providers.mjs";
+import { validateProviderCredential } from "./providers.mjs";
 import { createPrompts } from "./prompts.mjs";
 import { banner, clearScreen, hint, section, spinner, statusMark, success, warning } from "./ui.mjs";
 import { inferLanguage, translator } from "./i18n.mjs";
@@ -27,9 +27,17 @@ Automation and advanced commands:
   ahub ask <architect|coder|reviewer> [--cli claude|codex] [--model inherit|alias|model-id] -- <task>
   ahub model list
   ahub model set <alias> <model-id> [--provider <provider>]
-  ahub auth set deepseek
+  ahub model default <alias>
+  ahub model favorite <alias>
+  ahub model hide <alias>
+  ahub model show <alias>
+  ahub model remove <alias>
+  ahub auth set <provider> [--key-file <path>]
   ahub auth status
-  ahub auth remove deepseek
+  ahub auth remove <provider>
+  ahub provider add <name> <baseUrl> [--label <label>]
+  ahub provider list
+  ahub provider remove <name>
   ahub agent list
   ahub agent set <agent> <cli|model> <value>
   ahub command list
@@ -76,18 +84,32 @@ function redact(value, secret) {
   return value.split(secret).join("[REDACTED]");
 }
 
-async function connectDeepSeek(root, prompts, t, options = {}) {
-  section(t("connectDeepseek"), t("connectDeepseekSub"));
+// Connect (and verify) a credential for any registered provider. Falls back to a
+// caller-supplied validateCredential (used by tests) and otherwise validates against
+// the provider's baseUrl via the OpenAI-compatible /models endpoint.
+async function connectProvider(root, providerKey, prompts, t, options = {}) {
+  const config = await loadConfig(root);
+  const providerConf = config.providers?.[providerKey] ?? { label: providerKey, baseUrl: undefined };
+  const label = providerConf.label ?? providerKey;
+  section(t("connectProvider", { label }), t("connectProviderSub", { label }));
   hint(t("credentialScopeHint"));
   while (true) {
-    const apiKey = options.readSecret ? await options.readSecret("deepseek") : prompts.password ? await prompts.password("DeepSeek API key") : await readHidden("DeepSeek API key: ");
+    let apiKey;
+    if (options.keyFile) {
+      try { apiKey = (await readFile(resolve(options.keyFile), "utf8")).trim(); }
+      catch (error) { throw new Error(`could not read key file ${options.keyFile}: ${error.message}`); }
+    } else {
+      apiKey = options.readSecret ? await options.readSecret(providerKey) : prompts.password ? await prompts.password(t("apiKeyFor", { label })) : await readHidden(`${t("apiKeyFor", { label })}: `);
+    }
     const progress = spinner(t("validatingKey"));
-    const validate = options.validateCredential ?? validateDeepSeekCredential;
-    const result = await validate(apiKey, options.deepseekValidation);
+    const result = options.validateCredential
+      ? await options.validateCredential(apiKey, options.validation)
+      : await validateProviderCredential(providerConf, apiKey, options.validation);
     if (!result.ok) {
       progress.fail(t(result.reason === "invalid-key" ? "invalidKey" : "validationFailed"));
+      // A key file's contents won't change by re-reading it, so don't offer a retry loop.
+      if (options.keyFile || !prompts.interactive) throw new Error(t(result.reason === "invalid-key" ? "invalidKeyHelp" : "validationFailedHelp"));
       warning(t(result.reason === "invalid-key" ? "invalidKeyHelp" : "validationFailedHelp"));
-      if (!prompts.interactive) throw new Error(t(result.reason === "invalid-key" ? "invalidKeyHelp" : "validationFailedHelp"));
       const action = await prompts.select(t("connectionNotSaved"), [
         { name: t("retryKey"), value: "retry" },
         { name: t("back"), value: "back" },
@@ -96,22 +118,25 @@ async function connectDeepSeek(root, prompts, t, options = {}) {
       continue;
     }
     progress.succeed(t("connectionVerified"));
-    await setProviderSecret(root, "deepseek", apiKey, { scope: "ahub", credentialHome: options.credentialHome, verifiedAt: new Date().toISOString() });
-    success(t("deepseekReadyEverywhere"));
+    await setProviderSecret(root, providerKey, apiKey, { scope: "ahub", credentialHome: options.credentialHome, verifiedAt: new Date().toISOString() });
+    success(t("providerReadyEverywhere", { label }));
     hint(t("globalKeyHint"));
     return true;
   }
 }
 
 async function ensureModelReady(root, model, prompts, t, options = {}) {
-  if (model !== "ds4f") return true;
-  if (await getProviderSecret(root, "deepseek", options)) return true;
-  const action = await prompts.select(t("deepseekNotConnected"), [
+  const config = await loadConfig(root);
+  const providerName = config.models[model]?.provider;
+  if (!providerName) return true;
+  if (await getProviderSecret(root, providerName, options)) return true;
+  const label = config.providers?.[providerName]?.label ?? providerName;
+  const action = await prompts.select(t("providerNotConnected", { label }), [
     { name: t("connectNow"), value: "connect" },
     { name: t("chooseAnotherModel"), value: "back" },
   ]);
   if (action === "back") return false;
-  return connectDeepSeek(root, prompts, t, options);
+  return connectProvider(root, providerName, prompts, t, options);
 }
 
 async function chooseLanguage(root, prompts, force = false) {
@@ -130,19 +155,177 @@ async function chooseLanguage(root, prompts, force = false) {
 }
 
 async function showConfig(root, config, t = translator(config.ui?.language ?? inferLanguage()), options = {}) {
-  const deepseekReady = Boolean(await getProviderSecret(root, "deepseek", options));
+  const providers = config.providers ?? {};
+  const usedProviders = [...new Set(Object.values(config.models).map((model) => model.provider).filter(Boolean))];
+  const readiness = {};
+  await Promise.all(usedProviders.map(async (name) => {
+    const connected = Boolean(await getProviderSecret(root, name, options));
+    readiness[name] = connected ? t("readyShort") : t("blockedShort", { label: providers[name]?.label ?? name });
+  }));
   section(t("currentSetup"), t("currentSetupSub"));
   console.log(`\n${t("agents")}`);
   for (const [name, agent] of Object.entries(config.agents)) {
     const model = agent.model ?? "inherit";
-    const readiness = model === "ds4f" ? (deepseekReady ? t("readyShort") : t("blockedShort")) : t("readyShort");
-    console.log(`  ${name.padEnd(11)} ${agent.cli ?? agent.runtime} · ${model} · ${readiness}`);
+    console.log(`  ${name.padEnd(11)} ${agent.cli ?? agent.runtime} · ${model}`);
   }
   console.log(`\n${t("models")}`);
   console.log(`  inherit     ${t("inheritRow")}`);
   for (const [name, model] of Object.entries(config.models)) {
-    const readiness = model.provider === "deepseek" ? (deepseekReady ? t("readyShort") : t("blockedShort")) : t("readyShort");
-    console.log(`  ${name.padEnd(11)} ${model.provider ?? "CLI provider"} · ${model.model} · ${readiness}`);
+    const ready = model.provider ? (readiness[model.provider] ?? t("readyShort")) : t("readyShort");
+    const ctx = model.contextWindow ? ` · ${Math.round(model.contextWindow / 1000)}k ctx` : "";
+    console.log(`  ${name.padEnd(14)} ${modelLabel(name, model, providers)}${ctx} · ${model.enabled === false ? t("hiddenShort") : ready}`);
+  }
+  const activeAlias = config.defaults.activeModel;
+  const activeModel = config.models[activeAlias];
+  const activeDisplay = activeModel ? modelLabel(activeAlias, activeModel, providers) : activeAlias;
+  console.log(`\n${t("activeModel")}  ${activeDisplay}`);
+}
+
+async function pickModel(prompts, message, config, extra = [], options = {}) {
+  const choices = [...extra, ...modelChoices(config, options)];
+  return (prompts.search ?? prompts.select)(message, choices);
+}
+
+async function addModelToLibrary(root, config, prompts, t) {
+  const providerChoices = [
+    ...Object.entries(config.providers ?? {}).map(([key, conf]) => ({ name: `${conf.label ?? key} · ${t("directDelegation")}`, value: key })),
+    { name: t("hostProvider"), value: undefined },
+  ];
+  const provider = await prompts.select(t("modelSource"), providerChoices);
+  const alias = (await prompts.ask(t("modelAlias"), {
+    validate: (value) => { const s = (value ?? "").trim(); return (s && s !== "inherit" && /^[a-z0-9][a-z0-9_-]*$/iu.test(s)) ? true : t("aliasInvalid"); },
+  })).trim();
+  const modelId = (await prompts.ask(t("modelId"), {
+    validate: (value) => (value ?? "").trim() ? true : t("modelIdInvalid"),
+  })).trim();
+  // Scripted/non-interactive callers bypass inquirer's validate; keep a guard so they still fail fast.
+  if (!alias || alias === "inherit" || !/^[a-z0-9][a-z0-9_-]*$/iu.test(alias)) throw new Error(t("aliasInvalid"));
+  if (!modelId) throw new Error(t("modelIdInvalid"));
+  const displayName = (await prompts.ask(t("modelDisplayName"), { default: alias })).trim() || alias;
+  if (config.models[alias] && !await (prompts.confirm?.(t("replaceModel", { alias }), false) ?? false)) return;
+  config.models[alias] = { name: displayName, ...(provider ? { provider } : {}), model: modelId, favorite: false, enabled: true };
+  await saveConfig(root, config);
+  success(`${t("modelSaved")} ${alias} → ${displayName}`);
+}
+
+// When the active model is hidden or removed, fall back to another delegatable model so
+// @ahub /ds never points at a model that cannot run.
+function reassignActive(config, excludedAlias, t) {
+  const next = fallbackActiveModel(config, excludedAlias);
+  if (next) {
+    config.defaults.activeModel = next;
+    config.defaults.externalModel = next;
+    warning(t("activeModelReassigned", { alias: excludedAlias, next }));
+  } else {
+    warning(t("activeModelNoFallback", { alias: excludedAlias }));
+  }
+}
+
+async function manageModelLibrary(root, config, prompts, t) {
+  if (!Object.keys(config.models).length) return warning(t("noModels"));
+  const alias = await pickModel(prompts, t("chooseLibraryModel"), config);
+  const model = config.models[alias];
+  const action = await prompts.select(modelLabel(alias, model, config.providers ?? {}), [
+    { name: model.favorite ? t("unfavoriteModel") : t("favoriteModel"), value: "favorite" },
+    { name: model.enabled === false ? t("showModel") : t("hideModel"), value: "enabled" },
+    ...(model.provider ? [{ name: t("setActiveModel"), value: "active" }] : []),
+    ...(alias === "ds4f" ? [] : [{ name: t("removeModel"), value: "remove" }]),
+    { name: t("back"), value: "back" },
+  ]);
+  if (action === "back") return;
+  if (action === "favorite") model.favorite = !model.favorite;
+  if (action === "enabled") {
+    const willHide = model.enabled !== false;
+    model.enabled = willHide ? false : true;
+    if (willHide && alias === config.defaults.activeModel) reassignActive(config, alias, t);
+  }
+  if (action === "active") { config.defaults.activeModel = alias; config.defaults.externalModel = alias; }
+  if (action === "remove") {
+    const usedBy = Object.entries(config.agents).filter(([, agent]) => agent.model === alias).map(([name]) => name);
+    if (usedBy.length) throw new Error(t("modelInUse", { agents: usedBy.join(", ") }));
+    if (alias === config.defaults.activeModel) reassignActive(config, alias, t);
+    delete config.models[alias];
+  }
+  await saveConfig(root, config);
+  success(t("modelLibraryUpdated"));
+}
+
+async function addProvider(root, config, prompts, t) {
+  const name = await prompts.ask(t("providerName"), {
+    validate: (value) => (/^[a-z0-9][a-z0-9_-]*$/iu.test((value ?? "").trim()) ? true : t("providerNameInvalid")),
+  });
+  const baseUrl = (await prompts.ask(t("providerBaseUrl"))).trim().replace(/\/$/u, "");
+  if (!baseUrl) throw new Error(t("providerBaseUrlInvalid"));
+  if (!/^https?:\/\//iu.test(baseUrl)) throw new Error(t("providerBaseUrlInvalid"));
+  const label = ((await prompts.ask(t("providerLabel"), { default: name })) || name).trim();
+  if (config.providers?.[name] && !(prompts.confirm?.(t("providerReplace", { name }), false) ?? false)) return undefined;
+  config.providers = { ...(config.providers ?? {}), [name]: { label, baseUrl, kind: "openai" } };
+  await saveConfig(root, config);
+  success(t("providerAdded", { name, label }));
+  return name;
+}
+
+async function configureProviders(root, prompts, t, options = {}) {
+  do {
+    const config = await loadConfig(root);
+    const providers = config.providers ?? {};
+    const keys = Object.keys(providers);
+    const choices = [
+      ...keys.map((key) => ({ name: `${providers[key].label ?? key} · ${providers[key].baseUrl ?? ""}`, value: key })),
+      { name: t("providerAdd"), value: "__add__" },
+      { name: t("back"), value: "__back__" },
+    ];
+    const selection = await prompts.select(keys.length ? t("chooseProvider") : t("providerConnections"), choices);
+    if (selection === "__back__") return;
+    if (selection === "__add__") {
+      const added = await addProvider(root, config, prompts, t).catch((error) => { warning(error.message); return undefined; });
+      if (added && (prompts.confirm?.(t("connectProviderNow", { label: config.providers[added].label ?? added }), true) ?? true)) {
+        await connectProvider(root, added, prompts, t, options).catch((error) => warning(error.message));
+      }
+      continue;
+    }
+    const providerConf = providers[selection];
+    const label = providerConf.label ?? selection;
+    const credential = await getProviderCredential(root, selection, options);
+    const credentialAction = await prompts.select(t("providerConnections"), [
+      { name: credential ? t("providerConnected", { label, scope: t(credential.scope === "ahub" ? "ahubScope" : "projectScope") }) : t("connectProvider", { label }), value: credential ? "status" : "set" },
+      ...(credential ? [{ name: t("replaceKey"), value: "set" }, { name: t("removeKey"), value: "remove" }] : []),
+      { name: t("back"), value: "back" },
+    ]);
+    if (credentialAction === "back") continue;
+    if (credentialAction === "set") { await connectProvider(root, selection, prompts, t, options).catch((error) => warning(error.message)); continue; }
+    if (credentialAction === "status") { success(t("providerReadyEverywhere", { label })); continue; }
+    if (credentialAction === "remove") {
+      await removeProviderSecret(root, selection, { scope: credential.scope, credentialHome: options.credentialHome });
+      success(t("keyRemoved"));
+      continue;
+    }
+  } while (prompts.interactive);
+}
+
+async function configureModels(root, prompts, t, options = {}) {
+  const config = await loadConfig(root);
+  const action = await prompts.select(t("modelLibrary"), [
+    { name: t("browseModels"), value: "browse" },
+    { name: t("addModel"), value: "add" },
+    { name: t("manageModel"), value: "manage" },
+    { name: t("providerConnections"), value: "providers" },
+    { name: t("setActiveModel"), value: "active" },
+    { name: t("back"), value: "back" },
+  ]);
+  if (action === "back") return;
+  if (action === "browse") return showConfig(root, config, t, options);
+  if (action === "add") return addModelToLibrary(root, config, prompts, t);
+  if (action === "manage") return manageModelLibrary(root, config, prompts, t);
+  if (action === "providers") return configureProviders(root, prompts, t, options);
+  if (action === "active") {
+    const delegatable = Object.entries(config.models).filter(([, model]) => model.provider && model.enabled !== false);
+    if (!delegatable.length) return warning(t("noDelegatableModels"));
+    const alias = await pickModel(prompts, t("setActiveModel"), config, [], { filter: (_alias, model) => Boolean(model.provider) });
+    config.defaults.activeModel = alias;
+    config.defaults.externalModel = alias;
+    await saveConfig(root, config);
+    return success(t("activeModelSet", { alias }));
   }
 }
 
@@ -159,67 +342,15 @@ async function configure(root, options = {}) {
   ]);
   if (action === "back") return;
   if (action === "show") return showConfig(root, config, t, options);
-  let modelAction = action;
-  if (action === "models") {
-    modelAction = await prompts.select(t("modelsCredentials"), [
-      { name: t("deepseekChoice"), value: "deepseek" },
-      { name: t("customModel"), value: "custom" },
-      { name: t("viewModels"), value: "show-models" },
-      { name: t("back"), value: "back" },
-    ]);
-  }
-  if (modelAction === "back") return;
-  if (modelAction === "show-models") return showConfig(root, config, t, options);
-  if (modelAction === "custom") {
-    const alias = await prompts.ask(t("modelAlias"));
-    const modelId = await prompts.ask(t("modelId"));
-    if (!alias || alias === "inherit" || !/^[a-z0-9][a-z0-9_-]*$/iu.test(alias)) throw new Error("model name must use letters, numbers, hyphens, or underscores");
-    if (!modelId) throw new Error("model ID cannot be empty");
-    config.models[alias] = { model: modelId };
-    await saveConfig(root, config);
-    success(`${t("modelSaved")} ${alias} → ${modelId}`);
-    hint(t("assignHint"));
-    return;
-  }
-  if (modelAction === "deepseek") {
-    const credential = await getProviderCredential(root, "deepseek", options);
-    let credentialAction = await prompts.select("DeepSeek", [
-      { name: credential ? t("deepseekConnected", { scope: t(credential.scope === "ahub" ? "ahubScope" : "projectScope") }) : t("connectDeepseek"), value: credential ? "status" : "set" },
-      ...(credential ? [{ name: t("replaceKey"), value: "set" }, { name: t("removeKey"), value: "remove" }] : []),
-      ...(credential ? [{ name: t("assignDeepseek"), value: "agent" }] : []),
-      { name: t("back"), value: "back" },
-    ]);
-    if (credentialAction === "back") return;
-    if (credentialAction === "status") {
-      success(t("deepseekReadyEverywhere"));
-      hint(t("globalKeyHint"));
-      return;
-    }
-    if (credentialAction === "set") {
-      if (!await connectDeepSeek(root, prompts, t, options)) return;
-      credentialAction = await prompts.select(t("whatNext"), [
-        { name: t("assignDeepseek"), value: "agent" },
-        { name: t("done"), value: "done" },
-      ]);
-      if (credentialAction === "done") return;
-    }
-    if (credentialAction === "remove") {
-      await removeProviderSecret(root, "deepseek", { scope: credential.scope, credentialHome: options.credentialHome });
-      success(t("keyRemoved"));
-      return;
-    }
-  }
-  const agentName = await prompts.select(t("whichAgent"), Object.keys(config.agents).map((name) => ({ label: name, value: name })));
+  if (action === "models") return configureModels(root, prompts, t, options);
+  // action === "agent" (the only remaining value) → configure one agent's CLI and model.
+  const agentName = await prompts.select(t("whichAgent"), Object.keys(config.agents).map((name) => ({ label: t(name) !== name ? t(name) : name, value: name })));
   const cli = await prompts.select(t("whichCli"), [
     { label: "Claude Code", value: "claude" },
     { label: "Codex", value: "codex" },
   ]);
-  const model = await prompts.select(t("whichModel"), [
+  const model = await pickModel(prompts, t("whichModel"), config, [
     { label: t("inheritModel", { cli: cli === "claude" ? "Claude Code" : "Codex" }), value: "inherit" },
-    ...Object.entries(config.models).map(([name, item]) => ({
-      label: `${name === "ds4f" ? "DeepSeek V4 Flash" : name} · ${item.model}${item.provider ? ` via ${item.provider}` : ""}`,
-      value: name,
-    })),
   ]);
   if (!await ensureModelReady(root, model, prompts, t, options)) return;
   config.agents[agentName].cli = cli;
@@ -276,14 +407,27 @@ async function inspectPlugin(command, args, id, available) {
 
 async function getSystemStatus(root) {
   const [claudeVersion, codexVersion] = await Promise.all([commandVersion("claude"), commandVersion("codex")]);
-  const [claudePlugin, codexPlugin, deepseek] = await Promise.all([
+  const [claudePlugin, codexPlugin] = await Promise.all([
     inspectPlugin("claude", ["plugin", "list", "--json"], "ahub@ahub", claudeVersion),
     inspectPlugin("codex", ["plugin", "list", "--json"], "ahub@ahub", codexVersion),
-    getProviderCredential(root, "deepseek"),
   ]);
   const config = await loadConfig(root);
-  const deepseekRequired = Object.values(config.agents).some((agent) => agent.model === "ds4f");
-  return { claudeVersion, codexVersion, claudePlugin, codexPlugin, deepseek: Boolean(deepseek), deepseekScope: deepseek?.scope, deepseekVerified: Boolean(deepseek?.verifiedAt), deepseekRequired };
+  const providerKeys = Object.keys(config.providers ?? {});
+  const providerStatus = {};
+  await Promise.all(providerKeys.map(async (key) => {
+    const credential = await getProviderCredential(root, key);
+    providerStatus[key] = {
+      label: config.providers[key]?.label ?? key,
+      connected: Boolean(credential?.apiKey),
+      scope: credential?.scope,
+      verified: Boolean(credential?.verifiedAt),
+    };
+  }));
+  const usedProviders = [...new Set([
+    config.defaults.activeModel && config.models[config.defaults.activeModel]?.provider,
+    ...Object.values(config.agents).map((agent) => config.models[agent.model]?.provider),
+  ].filter(Boolean))];
+  return { claudeVersion, codexVersion, claudePlugin, codexPlugin, providerStatus, usedProviders };
 }
 
 async function pluginStatus(root, t = translator(inferLanguage())) {
@@ -292,7 +436,12 @@ async function pluginStatus(root, t = translator(inferLanguage())) {
   section(t("systemStatus"), t("systemStatusSub"));
   console.log(`\n  Claude Code  ${statusMark(status.claudeVersion ? status.claudePlugin : undefined, marks)}  ${status.claudeVersion ?? t("notFound")}`);
   console.log(`  Codex        ${statusMark(status.codexVersion ? status.codexPlugin : undefined, marks)}  ${status.codexVersion ?? t("notFound")}`);
-  console.log(`  DeepSeek     ${statusMark(status.deepseek ? true : status.deepseekRequired ? false : undefined, marks)}  ${status.deepseek ? t(status.deepseekVerified ? "connectionVerified" : "keyNotVerified") : status.deepseekRequired ? t("keyRequired") : t("optional")}`);
+  for (const [key, provider] of Object.entries(status.providerStatus)) {
+    const required = status.usedProviders.includes(key);
+    const state = provider.connected ? true : required ? false : undefined;
+    const detail = provider.connected ? (provider.verified ? t("connectionVerified") : t("keyNotVerified")) : required ? t("keyRequired") : t("optional");
+    console.log(`${provider.label.padEnd(14)} ${statusMark(state, marks)}  ${detail}`);
+  }
   if (status.claudePlugin !== "installed" && status.codexPlugin !== "installed") hint(t("installHint"));
   return status;
 }
@@ -326,14 +475,18 @@ async function configureShortcuts(root, prompts, t) {
     success(`${t("shortcutRemoved")} ${name}`);
     return;
   }
-  let name = (await prompts.ask(t("shortcutName"))).trim();
+  let name = (await prompts.ask(t("shortcutName"), {
+    validate: (value) => {
+      const s = (value ?? "").trim().replace(/^(!?\/)/u, "");
+      return /^[\p{L}\p{N}_-]+$/u.test(s) ? true : t("shortcutNameInvalid");
+    },
+  })).trim();
   if (name && !name.startsWith("/")) name = `/${name}`;
-  if (!/^\/[\p{L}\p{N}_-]+$/u.test(name)) throw new Error("shortcut name must contain only letters, numbers, hyphens, or underscores");
-  const model = await prompts.select(t("shortcutModel"), [
-    { name: "DeepSeek V4 Flash", value: "ds4f" },
+  if (!/^\/[\p{L}\p{N}_-]+$/u.test(name)) throw new Error(t("shortcutNameInvalid"));
+  const model = await pickModel(prompts, t("shortcutModel"), config, [
     { name: t("noOverride"), value: undefined },
     { name: "Host / Native", value: "native" },
-  ]);
+  ], { filter: (_alias, item) => Boolean(item.provider) });
   const contextMode = await prompts.select(t("shortcutContext"), [
     { name: t("contextRelated"), value: "related" },
     { name: t("contextBrief"), value: "brief" },
@@ -374,57 +527,61 @@ async function controlCenter(root, options = {}) {
       { name: t("exit"), value: "exit" },
     ]);
     if (action === "exit") return;
-    if (action === "language") {
-      const language = await chooseLanguage(root, prompts, true);
-      success(translator(language)("languageSaved"));
-      continue;
-    }
-    if (action === "agents") await configure(root, { ...options, prompts, initialAction: "agent" });
-    if (action === "models") await configure(root, { ...options, prompts, initialAction: "models" });
-    if (action === "shortcuts") await configureShortcuts(root, prompts, t);
-    if (action === "status") {
-      showConfig(root, await loadConfig(root), t, options);
-      await pluginStatus(root, t);
-    }
-    if (action === "install") {
-      const status = await getSystemStatus(root);
-      const choices = [];
-      if (status.claudeVersion) choices.push({ name: `Claude Code  ${status.claudePlugin === "installed" ? t("refresh") : ""}`, value: "claude", checked: status.claudePlugin !== "installed" });
-      if (status.codexVersion) choices.push({ name: `Codex        ${status.codexPlugin === "installed" ? t("refresh") : ""}`, value: "codex", checked: status.codexPlugin !== "installed" });
-      if (!choices.length) throw new Error("Claude Code and Codex CLIs were not found.");
-      const targets = prompts.checkbox ? await prompts.checkbox(t("selectIntegrations"), choices) : [await prompts.select(t("selectIntegrations"), choices)];
-      if (!await (prompts.confirm?.(t("installConfirm", { targets: targets.join(" + ") }), true) ?? true)) continue;
-      for (const target of targets) {
-        const targetName = target === "claude" ? "Claude Code" : "Codex";
-        const progress = spinner(t("installing", { target: targetName }));
-        try { await installPlugin(target, { ...options, silent: true }); progress.succeed(t("integrationReady", { target: targetName })); }
-        catch (error) { progress.fail(t("installFailed")); throw error; }
+    try {
+      if (action === "language") {
+        const language = await chooseLanguage(root, prompts, true);
+        success(translator(language)("languageSaved"));
+        continue;
       }
-    }
-    if (action === "run") {
-      if (!(await exists(paths(root).state))) await init(root);
-      const agent = await prompts.select(t("chooseAgent"), [
-        { label: t("coder"), value: "coder" },
-        { label: t("architect"), value: "architect" },
-        { label: t("reviewer"), value: "reviewer" },
-        { label: t("back"), value: "back" },
-      ]);
-      if (agent === "back") continue;
-      const route = await prompts.select(t("runWith"), [
-        { label: t("agentDefaults"), value: {} },
-        { label: t("cliOwnModel", { cli: "Claude Code" }), value: { cli: "claude", model: "inherit" } },
-        { label: t("cliOwnModel", { cli: "Codex" }), value: { cli: "codex", model: "inherit" } },
-        { label: "Claude Code · DeepSeek V4 Flash", value: { cli: "claude", model: "ds4f" } },
-        { label: "Codex · DeepSeek V4 Flash", value: { cli: "codex", model: "ds4f" } },
-      ]);
-      if (!await ensureModelReady(root, route.model, prompts, t, options)) continue;
-      const task = await prompts.ask(t("describeTask"));
-      if (!task) { warning(t("emptyTask")); continue; }
-      const args = ["ask", agent];
-      if (route.cli) args.push("--cli", route.cli);
-      if (route.model) args.push("--model", route.model);
-      args.push("--", task);
-      await main(args, { ...options, root, interactive: false });
+      if (action === "agents") await configure(root, { ...options, prompts, initialAction: "agent" });
+      if (action === "models") await configure(root, { ...options, prompts, initialAction: "models" });
+      if (action === "shortcuts") await configureShortcuts(root, prompts, t);
+      if (action === "status") {
+        showConfig(root, await loadConfig(root), t, options);
+        await pluginStatus(root, t);
+      }
+      if (action === "install") {
+        const status = await getSystemStatus(root);
+        const choices = [];
+        if (status.claudeVersion) choices.push({ name: `Claude Code  ${status.claudePlugin === "installed" ? t("refresh") : ""}`, value: "claude", checked: status.claudePlugin !== "installed" });
+        if (status.codexVersion) choices.push({ name: `Codex        ${status.codexPlugin === "installed" ? t("refresh") : ""}`, value: "codex", checked: status.codexPlugin !== "installed" });
+        if (!choices.length) throw new Error(t("noCliFound"));
+        const targets = prompts.checkbox ? await prompts.checkbox(t("selectIntegrations"), choices) : [await prompts.select(t("selectIntegrations"), choices)];
+        if (!await (prompts.confirm?.(t("installConfirm", { targets: targets.join(" + ") }), true) ?? true)) continue;
+        for (const target of targets) {
+          const targetName = target === "claude" ? "Claude Code" : "Codex";
+          const progress = spinner(t("installing", { target: targetName }));
+          try { await installPlugin(target, { ...options, silent: true }); progress.succeed(t("integrationReady", { target: targetName })); }
+          catch (error) { progress.fail(t("installFailed")); throw error; }
+        }
+      }
+      if (action === "run") {
+        if (!(await exists(paths(root).state))) await init(root);
+        const agent = await prompts.select(t("chooseAgent"), [
+          { label: t("coder"), value: "coder" },
+          { label: t("architect"), value: "architect" },
+          { label: t("reviewer"), value: "reviewer" },
+          { label: t("back"), value: "back" },
+        ]);
+        if (agent === "back") continue;
+        const route = await prompts.select(t("runWith"), [
+          { label: t("agentDefaults"), value: {} },
+          { label: t("cliOwnModel", { cli: "Claude Code" }), value: { cli: "claude", model: "inherit" } },
+          { label: t("cliOwnModel", { cli: "Codex" }), value: { cli: "codex", model: "inherit" } },
+          ...modelChoices(config).map((choice) => ({ label: `${choice.name} · ${t("currentCli")}`, value: { model: choice.value } })),
+        ]);
+        if (!await ensureModelReady(root, route.model, prompts, t, options)) continue;
+        const task = await prompts.ask(t("describeTask"));
+        if (!task) { warning(t("emptyTask")); continue; }
+        const args = ["ask", agent];
+        if (route.cli) args.push("--cli", route.cli);
+        if (route.model) args.push("--model", route.model);
+        args.push("--", task);
+        await main(args, { ...options, root, interactive: false });
+      }
+    } catch (error) {
+      // Keep the menu alive: surface the failure and loop back instead of dying with a stack trace.
+      warning(t("menuActionFailed", { error: error.message }));
     }
   } while (repeat);
 }
@@ -436,7 +593,7 @@ async function onboarding(root, config, available, options = {}) {
   const t = translator(language);
   if (!options.quietUi) {
     clearScreen();
-    banner("0.3.0", t("tagline"));
+    banner("0.5.0", t("tagline"));
     section(t("quick1"), t("quick1Sub"));
   }
   const choices = [];
@@ -469,6 +626,7 @@ async function onboarding(root, config, available, options = {}) {
       catch (error) { progress.fail(t("couldNotInstall")); warning(error.message); }
     }
     success(t("setupComplete"));
+    hint(t("moreModelsHint"));
     hint(t("changeAnytime"));
   }
 }
@@ -486,7 +644,7 @@ async function init(root) {
   await mkdir(target.dir, { recursive: true });
   await saveState(root, emptyState());
   await saveConfig(root, DEFAULT_CONFIG);
-  await writeFile(resolve(target.dir, ".gitignore"), "state.json\nsecrets.json\n*.tmp\n");
+  await writeFile(resolve(target.dir, ".gitignore"), "state.json\nsecrets.json\ndelegations.jsonl\n*.tmp\n");
   console.log(`Initialized ahub in ${target.dir}`);
 }
 
@@ -554,7 +712,7 @@ export async function main(argv, options = {}) {
     const t = translator(config.ui?.language ?? inferLanguage());
     if (!options.quietUi) {
       clearScreen();
-      banner("0.3.0", t("tagline"));
+      banner("0.5.0", t("tagline"));
       hint(`${t("project")}  ${root}`);
     }
     return controlCenter(root, options);
@@ -619,6 +777,13 @@ export async function main(argv, options = {}) {
       throw new Error(`${t("deepseekNotConnectedShort")} ${t("runAhubToConnect")}`);
     }
     if (runtime !== "mock" && runtimeOptions.provider === "deepseek") runtimeOptions.apiKey = await getProviderSecret(root, "deepseek", options);
+    // Terminal `ask` drives the host CLI binary, which ahub can wire for DeepSeek and for the
+    // CLI's own configured model (inherit). Other external providers must be delegated from the
+    // host app (@ahub), not spawned here — refuse cleanly instead of spawning with no credential.
+    if (runtime !== "mock" && runtimeOptions.provider && runtimeOptions.provider !== "deepseek") {
+      const t = translator(config.ui?.language ?? inferLanguage());
+      throw new Error(t("askExternalProviderUseDelegate", { provider: runtimeOptions.provider }));
+    }
     if (selection.commands.length || requestedCli || requestedModel !== undefined) console.log(`Using request settings: ${runtime} CLI / ${runtimeOptions.provider ?? "CLI config"} / ${runtimeOptions.model ?? "inherit"}`);
     return run(root, runtime, session.name, prompt, agent.fresh ? "task" : agent.context ?? config.defaultContext, runtimeOptions, agentName);
   }
@@ -652,32 +817,71 @@ export async function main(argv, options = {}) {
     if (!name || !modelId || name === "inherit") throw new Error("usage: ahub model set <alias> <model-id> [--provider <provider>]");
     const config = await loadConfig(root);
     const provider = flag(rest, "--provider", undefined);
-    if (provider && provider !== "deepseek") throw new Error("unsupported provider. Currently supported: deepseek. Omit --provider to use the selected CLI's own provider configuration.");
-    config.models[name] = { ...(provider ? { provider } : {}), model: modelId };
+    if (provider && !config.providers?.[provider]) throw new Error(`unknown provider: ${provider}. Registered: ${Object.keys(config.providers ?? {}).join(", ") || "(none)"}. Add one with \`ahub provider add <name> <baseUrl>\`, or omit --provider to use the CLI's own provider configuration.`);
+    if (name === "ds4f" && provider && provider !== "deepseek") throw new Error("the built-in ds4f model must keep the deepseek provider; add a new alias for other providers");
+    // Merge with any existing entry so changing a model ID does not wipe provider/name/favorite.
+    config.models[name] = { ...(config.models[name] ?? {}), ...(provider ? { provider } : {}), model: modelId };
     await saveConfig(root, config);
     console.log(`Saved model ${name} → ${provider ? `${provider} / ` : ""}${modelId}`);
     return;
   }
+  if (command === "model" && ["default", "favorite", "hide", "show", "remove"].includes(subcommand)) {
+    const alias = rest[0];
+    const config = await loadConfig(root);
+    if (!config.models[alias]) throw new Error(`unknown model alias: ${alias}`);
+    if (subcommand === "default") {
+      if (!config.models[alias].provider) throw new Error("the active/external model must be directly delegatable (a model with a connected provider). This alias uses the host CLI, so it cannot be the @ahub /ds default.");
+      config.defaults.externalModel = alias;
+      config.defaults.activeModel = alias;
+    }
+    if (subcommand === "favorite") config.models[alias].favorite = !config.models[alias].favorite;
+    if (subcommand === "hide") {
+      config.models[alias].enabled = false;
+      if (alias === config.defaults.activeModel) reassignActive(config, alias, translator(config.ui?.language ?? inferLanguage()));
+    }
+    if (subcommand === "show") config.models[alias].enabled = true;
+    if (subcommand === "remove") {
+      if (alias === "ds4f") throw new Error("the built-in ds4f model cannot be removed; hide it instead");
+      const usedBy = Object.entries(config.agents).filter(([, agent]) => agent.model === alias).map(([name]) => name);
+      if (usedBy.length) throw new Error(`model is used by: ${usedBy.join(", ")}`);
+      if (alias === config.defaults.activeModel) reassignActive(config, alias, translator(config.ui?.language ?? inferLanguage()));
+      delete config.models[alias];
+    }
+    await saveConfig(root, config);
+    console.log(`Updated model ${alias}: ${subcommand}`);
+    return;
+  }
   if (command === "auth" && subcommand === "set") {
     if (!(await exists(paths(root).state))) await init(root);
-    const provider = rest[0];
-    if (provider !== "deepseek") throw new Error("usage: ahub auth set deepseek");
-    const prompts = options.prompts ?? createPrompts();
+    const positional = withoutFlags(rest, ["--key-file"]);
+    const providerKey = positional[0];
+    const keyFile = flag(rest, "--key-file", undefined);
     const config = await loadConfig(root);
-    await connectDeepSeek(root, prompts, translator(config.ui?.language ?? inferLanguage()), options);
+    if (!providerKey || !config.providers?.[providerKey]) throw new Error(`usage: ahub auth set <provider> [--key-file <path>]. Registered providers: ${Object.keys(config.providers ?? {}).join(", ") || "(none)"}. Add one with \`ahub provider add <name> <baseUrl>\`.`);
+    const prompts = options.prompts ?? createPrompts();
+    await connectProvider(root, providerKey, prompts, translator(config.ui?.language ?? inferLanguage()), { ...options, keyFile });
     return;
   }
   if (command === "auth" && subcommand === "status") {
-    const credential = await getProviderCredential(root, "deepseek", options);
-    console.log(`DeepSeek: ${credential?.apiKey ? `configured (${credential.scope === "ahub" ? "all ahub projects" : "this project"})${credential.verifiedAt ? ", verified" : ", not verified"}` : "not configured"}`);
+    const config = await loadConfig(root);
+    const providers = config.providers ?? {};
+    const keys = Object.keys(providers);
+    if (!keys.length) { console.log("No providers registered."); return; }
+    for (const key of keys) {
+      const credential = await getProviderCredential(root, key, options);
+      const label = providers[key].label ?? key;
+      console.log(`${label.padEnd(14)} ${credential?.apiKey ? `configured (${credential.scope === "ahub" ? "all ahub projects" : "this project"})${credential.verifiedAt ? ", verified" : ", not verified"}` : "not configured"}`);
+    }
     return;
   }
   if (command === "auth" && subcommand === "remove") {
-    const provider = rest[0];
-    if (provider !== "deepseek") throw new Error("usage: ahub auth remove deepseek");
-    const credential = await getProviderCredential(root, provider, options);
-    const removed = credential ? await removeProviderSecret(root, provider, { scope: credential.scope, credentialHome: options.credentialHome }) : false;
-    console.log(removed ? "Removed DeepSeek credentials from this project." : "DeepSeek credentials were not configured for this project.");
+    const providerKey = rest[0];
+    const config = await loadConfig(root);
+    if (!providerKey || !config.providers?.[providerKey]) throw new Error(`usage: ahub auth remove <provider>. Registered: ${Object.keys(config.providers ?? {}).join(", ") || "(none)"}`);
+    const label = config.providers[providerKey].label ?? providerKey;
+    const credential = await getProviderCredential(root, providerKey, options);
+    const removed = credential ? await removeProviderSecret(root, providerKey, { scope: credential.scope, credentialHome: options.credentialHome }) : false;
+    console.log(removed ? `Removed ${label} credentials.` : `${label} credentials were not configured.`);
     return;
   }
   if (command === "agent" && subcommand === "list") {
@@ -692,7 +896,7 @@ export async function main(argv, options = {}) {
     const config = await loadConfig(root);
     if (!config.agents[name]) throw new Error(`unknown agent: ${name}`);
     if (field === "cli") {
-      if (!["claude", "codex"].includes(value)) throw new Error("CLI must be claude or codex");
+      if (!["claude", "codex", "mock"].includes(value)) throw new Error("CLI must be claude, codex, or mock");
       config.agents[name].cli = value;
       delete config.agents[name].runtime;
     } else if (field === "model") {
@@ -746,10 +950,11 @@ export async function main(argv, options = {}) {
       ...(flag(rest, "--role", undefined) ? { role: flag(rest, "--role") } : {}),
     };
     if (!Object.keys(preset).length) throw new Error("choose at least one of --model, --context, or --role");
-    if (preset.model && !["ds4f", "native"].includes(preset.model)) throw new Error("model must be ds4f or native");
+    const config = await loadConfig(root);
+    if (preset.model && preset.model !== "native" && !config.models[preset.model]) throw new Error(`unknown model alias: ${preset.model}`);
+    if (preset.model && preset.model !== "native" && !config.models[preset.model].provider) throw new Error("shortcut models must support direct delegation (a model with a connected provider)");
     if (preset.contextMode && !["brief", "related", "full", "fresh"].includes(preset.contextMode)) throw new Error("context must be brief, related, full, or fresh");
     if (preset.role && !["architect", "coder", "reviewer"].includes(preset.role)) throw new Error("role must be architect, coder, or reviewer");
-    const config = await loadConfig(root);
     config.shortcuts[name] = preset;
     await saveConfig(root, config);
     console.log(`Saved ${name} → ${Object.entries(preset).map(([key, value]) => `${key}:${value}`).join(" · ")}`);
@@ -762,6 +967,39 @@ export async function main(argv, options = {}) {
     delete config.shortcuts[name];
     await saveConfig(root, config);
     console.log(`Removed ${name}`);
+    return;
+  }
+  if (command === "provider" && subcommand === "list") {
+    const config = await loadConfig(root);
+    const providers = config.providers ?? {};
+    if (!Object.keys(providers).length) { console.log("No providers registered."); return; }
+    console.log("Name            Label             Base URL");
+    for (const [key, conf] of Object.entries(providers)) console.log(`${key.padEnd(15)} ${(conf.label ?? key).padEnd(17)} ${conf.baseUrl ?? ""}`);
+    return;
+  }
+  if (command === "provider" && subcommand === "add") {
+    if (!(await exists(paths(root).state))) await init(root);
+    const positional = withoutFlags(rest, ["--label"]);
+    const [name, baseUrl] = positional;
+    if (!name || !baseUrl) throw new Error("usage: ahub provider add <name> <baseUrl> [--label <label>]");
+    if (!/^[a-z0-9][a-z0-9_-]*$/iu.test(name)) throw new Error("provider name must use letters, numbers, hyphens, or underscores");
+    const config = await loadConfig(root);
+    const label = flag(rest, "--label", undefined);
+    config.providers = { ...(config.providers ?? {}), [name]: { label: label ?? name, baseUrl: baseUrl.replace(/\/$/u, ""), kind: "openai" } };
+    await saveConfig(root, config);
+    console.log(`Added provider ${name} → ${label ?? name} @ ${baseUrl}`);
+    return;
+  }
+  if (command === "provider" && subcommand === "remove") {
+    const name = rest[0];
+    const config = await loadConfig(root);
+    if (!config.providers?.[name]) throw new Error(`unknown provider: ${name}`);
+    if (name === "deepseek") throw new Error("the built-in deepseek provider cannot be removed");
+    const usedBy = Object.entries(config.models).filter(([, model]) => model.provider === name).map(([alias]) => alias);
+    if (usedBy.length) throw new Error(`provider is used by models: ${usedBy.join(", ")}`);
+    delete config.providers[name];
+    await saveConfig(root, config);
+    console.log(`Removed provider ${name}`);
     return;
   }
   if (command === "install") {

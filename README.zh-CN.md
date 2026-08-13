@@ -2,6 +2,8 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
+当前版本：**0.5.0**
+
 在 Codex 或 Claude Code 中使用 DeepSeek 等模型，同时继承当前对话的相关上下文。
 
 ahub 是一个支持中英文的本地控制中心和插件，用于配置模型、智能体角色、宿主上下文委派和自定义快捷预设。日常使用以自然语言为主，CLI 命令主要用于自动化。
@@ -11,7 +13,10 @@ ahub 是一个支持中英文的本地控制中心和插件，用于配置模型
 - **不离开当前对话**：Codex 从当前可见内容中选择相关上下文，通过 ahub 交给 DeepSeek，再把答案返回同一个任务。
 - **密钥不污染环境**：模型密钥保存在 ahub 自己的私有凭据库中，不写入全局环境变量。
 - **默认简单**：通过中英文终端菜单配置模型、智能体、宿主集成和快捷预设。
-- **上下文范围明确**：支持 `brief`、`related`、`full`、`fresh`；发送完整上下文前必须确认。
+- **适合大量模型**：支持搜索、收藏、隐藏低频模型和设置一个“当前模型”。任何已注册的 OpenAI 兼容 provider 都能通过 `@ahub` 委派，不再局限于 DeepSeek。
+- **上下文范围明确**：支持 `brief`、`related`、`full`、`fresh`；发送完整上下文前必须确认。超过 6 万字符的上下文会被截断，并明确告知模型它只看到部分内容。
+- **委派鲁棒且透明**：回答在宿主支持时按 token 流式返回；每次调用都有超时，对限流和临时错误自动重试一次，并回传 token 用量与估算费用。常见密钥串（API key、AWS/Google/Slack/GitHub token、JWT、Bearer）会在上下文离开宿主前被抹除。
+- **多轮委派线程**：被委派的模型可跨轮次续接（`threadId` / `continue`），只基于自己之前的回答；宿主可用 `recall` 取回它说过的话。委派记录保存在本地（已 gitignore、仅所有者可读；用 `delegationLog: false` 可关闭）。
 - **同时支持 Codex 与 Claude Code**：可以只安装一个，也可以同时安装。
 - **安全角色预设**：Architect 只分析，Coder 实现并测试，Reviewer 进行独立只读审查。
 
@@ -27,7 +32,7 @@ ahub
 首次运行按菜单完成：
 
 1. 选择中文或 English。
-2. 如果需要 DeepSeek，在「模型与 API 密钥」中连接。
+2. 如果需要 DeepSeek，在「模型库 → Provider 连接」中连接。
 3. 进入「安装集成」，将 ahub 安装到 Codex、Claude Code 或两者。
 4. 新建 Codex 任务或 Claude Code 会话。
 
@@ -82,6 +87,8 @@ ahub 不读取 Codex 内部会话文件，也不会宣称外部模型能看到�
 - 上下文：`/brief`、`/related`、`/full`、`/fresh`
 - 角色：`/analyze`、`/code`、`/review`
 
+`/ds` 表示“当前模型”（粘性的活跃默认），不再写死为某个模型 ID。任何已连接的 provider 都能用——DeepSeek 是内置默认，你也可以注册更多。以后切换当前模型时，已有对话习惯和快捷预设不需要一起修改。
+
 例如：
 
 ```text
@@ -106,7 +113,7 @@ ahub
 ? ahub 控制中心
 ❯ ▶  运行智能体       启动 architect、coder 或 reviewer
   ⚙  智能体设置       选择默认终端和模型
-  ◇  模型与 API 密钥  配置低成本模型和自定义模型
+  ◇  模型库           搜索、收藏和管理所有模型
   ⌁  快捷预设         组合模型、上下文和智能体角色
   ＋ 安装集成         添加到 Claude Code 或 Codex
   ●  状态与诊断       检查配置和安装状态
@@ -124,10 +131,19 @@ ahub install all
 
 ## DeepSeek 密钥
 
-从菜单选择「模型与 API 密钥 → DeepSeek → 连接」，或者运行：
+从菜单选择「模型库 → Provider 连接 → DeepSeek → 连接」，或者运行：
 
 ```bash
 ahub auth set deepseek
+```
+
+DeepSeek 是内置 provider。要使用任何其他 OpenAI 兼容端点，先注册它，再加一个指向它的模型别名，最后连接密钥——这样每个有 provider 的模型都能通过 `@ahub` 委派，不再局限于 DeepSeek：
+
+```bash
+ahub provider add acme https://api.acme.example.com --label "Acme"
+ahub model set fast acme-fast --provider acme
+ahub auth set acme
+ahub model default fast   # 把 fast 设为 @ahub /ds 的当前模型
 ```
 
 输入会被隐藏。密钥保存在 `~/.ahub/credentials.json`，文件权限为 `600`，仅注入 ahub 发起的模型请求或子进程，不会修改 Shell 环境。
@@ -143,6 +159,17 @@ ahub auth remove deepseek
 
 普通用户建议直接运行 `ahub` 使用菜单。用于脚本和 CI 的命令包括：
 
+### 大量模型的管理方式
+
+ahub 把容易混在一起的四件事拆开：
+
+1. **Provider**：已注册的 OpenAI 兼容端点（DeepSeek 内置；用 `ahub provider add` 添加更多）。只有当模型的 provider 已注册**且**已连接时，它才能在 `@ahub` 里被委派。
+2. **Provider 连接**：按 provider 管理密钥和连通状态。
+3. **模型库**：管理简称、显示名称、模型 ID、标签、收藏和显示状态。
+4. **当前模型与使用默认值**：决定 `@ahub /ds` 和裸 `@ahub` 委派到哪个粘性“当前模型”，以及每个智能体使用哪个模型。
+
+进入 `ahub → 模型库` 可以浏览、添加、搜索、收藏、隐藏模型或设置当前模型。隐藏不会删除配置，只是不再出现在日常选择器中。已被智能体使用的模型和收藏模型会排在前面；选择器会内联显示 provider 和标签，模型超过 8 个后自动支持输入搜索。
+
 ```bash
 ahub agent list
 ahub model list
@@ -152,6 +179,16 @@ ahub agent set coder model inherit
 
 ahub model set myfast my-fast-model
 ahub agent set coder model myfast
+```
+
+脚本化管理模型库：
+
+```bash
+ahub model favorite myfast
+ahub model default myfast
+ahub model hide old-model
+ahub model show old-model
+ahub model remove old-model
 ```
 
 模型选择优先级：当前请求明确指定的模型 → 智能体默认模型 → Claude Code 或 Codex 自己配置的原生模型。

@@ -1,6 +1,6 @@
 {
   "name": "ahub",
-  "version": "0.1.0+codex.20260812115050",
+  "version": "0.2.0+codex.20260813105541",
   "description": "Use external models with host-selected conversation context and simple natural-language routing.",
   "author": {
     "name": "ahub"
@@ -9,8 +9,8 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "ahub",
-    "shortDescription": "Use DeepSeek with the context already in your task.",
-    "longDescription": "Delegate to DeepSeek without leaving the current conversation. The host selects relevant visible context, ahub filters sensitive text, and the result returns to the same task. Natural language is primary; composable shortcuts are optional.",
+    "shortDescription": "Use any connected model with the context already in your task.",
+    "longDescription": "Delegate to DeepSeek or any other connected ahub provider without leaving the current conversation. The host selects relevant visible context, ahub filters sensitive text, and the result returns to the same task. Natural language is primary; composable shortcuts are optional.",
     "developerName": "ahub",
     "category": "Productivity",
     "capabilities": [

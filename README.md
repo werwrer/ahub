@@ -2,6 +2,8 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
+Current version: **0.5.0**
+
 Use DeepSeek and other models inside Codex or Claude Code without losing the context of your current conversation.
 
 ahub is a bilingual local control center and plugin for model routing, agent roles, host-context delegation, and reusable shortcuts. Natural language is the primary interface; terminal commands are available for automation.
@@ -11,7 +13,10 @@ ahub is a bilingual local control center and plugin for model routing, agent rol
 - **Stay in the same conversation** — Codex selects relevant visible context, sends it to DeepSeek through ahub, and returns the answer to the same task.
 - **Private credentials** — provider keys live in ahub's owner-only credential store, never in global shell environment variables.
 - **Simple by default** — configure models, agents, integrations, and shortcut presets from a bilingual terminal menu.
-- **Explicit context control** — choose `brief`, `related`, `full`, or `fresh`; full-context sharing requires confirmation.
+- **Built for large model catalogs** — search models, favorite common choices, hide noisy entries, and set one active model. Any registered OpenAI-compatible provider can be delegated through `@ahub`, not only DeepSeek.
+- **Explicit context control** — choose `brief`, `related`, `full`, or `fresh`; full-context sharing requires confirmation. Context over 60k characters is truncated and the model is told it received a partial view.
+- **Resilient & transparent delegation** — answers stream token-by-token where the host supports it; every call has a timeout, retries once on rate limits and transient errors, and reports token usage and estimated cost. Secret patterns (API keys, AWS/Google/Slack/GitHub tokens, JWTs, Bearer tokens) are scrubbed before context leaves the host.
+- **Multi-turn delegation threads** — a delegated model can continue across turns (`threadId` / `continue`) using only its own prior answers, and the host can `recall` what it said. Delegations are logged locally (gitignored, owner-only; disable with `delegationLog: false`).
 - **Codex and Claude Code** — install either integration or both.
 - **Safe roles** — architect analyzes, coder implements, and reviewer performs an independent read-only review.
 
@@ -29,7 +34,7 @@ ahub
 In the guided menu:
 
 1. Select 中文 or English.
-2. Connect DeepSeek under **Models & API keys** if you want to use it.
+2. Connect DeepSeek under **Model library → Provider connections** if you want to use it.
 3. Choose **Install integrations** and install ahub into Codex, Claude Code, or both.
 4. Start a new Codex task or Claude Code session.
 
@@ -59,6 +64,8 @@ Optional shortcuts compose across three independent dimensions:
 - Context: `/brief`, `/related`, `/full`, `/fresh`
 - Work mode: `/analyze`, `/code`, `/review`
 
+`/ds` points to your active (current) model, so changing it does not require relearning commands or updating every prompt. Any connected provider works — DeepSeek is the built-in default, and you can register more.
+
 For example, `@ahub /ds /fresh /review 审查这个结论` asks DeepSeek for a fresh independent review. Full-context delegation always requires confirmation. To save `/省钱审查` as DeepSeek + related context + reviewer, open **Shortcut presets / 快捷预设** in the `ahub` menu—no command syntax is required.
 
 For development from this checkout:
@@ -82,7 +89,7 @@ ahub
 ? Control center
 ❯ ▶  Run an agent       Start architect, coder, or reviewer
   ⚙  Agent settings     Choose default CLI and model
-  ◇  Models & API keys  Configure low-cost and custom models
+  ◇  Model library      Search, favorite, and manage every model
   ⌁  Shortcut presets   Combine model, context, and agent role
   ＋ Install integrations  Add ahub to Claude Code or Codex
   ●  Status & doctor     Check configuration and integrations
@@ -153,10 +160,19 @@ Commands are composable and represent separate dimensions:
 
 This means `@ahub-coder /cc Fix the tests` uses Claude Code and its own configured model. Only `@ahub-coder /ds4f /cc Fix the tests` explicitly overrides that model with DeepSeek V4 Flash.
 
-Choose **Models & API keys → DeepSeek → Connect** in the terminal menu. ahub validates the key before saving it, then offers to assign DeepSeek to an agent. The equivalent scripting command is:
+Choose **Model library → Provider connections → DeepSeek → Connect** in the terminal menu. ahub validates the key before saving it, then offers to assign DeepSeek to an agent. The equivalent scripting command is:
 
 ```bash
 ahub auth set deepseek
+```
+
+DeepSeek is the built-in provider. To use any other OpenAI-compatible endpoint, register it, add a model alias pointing at it, then connect its key — every provider-backed model is then delegatable through `@ahub`, not only DeepSeek:
+
+```bash
+ahub provider add acme https://api.acme.example.com --label "Acme"
+ahub model set fast acme-fast --provider acme
+ahub auth set acme
+ahub model default fast   # make `fast` the active model for @ahub /ds
 ```
 
 The prompt hides input. ahub writes the key to `~/.ahub/credentials.json` with owner-only permissions and injects it only into the selected child CLI. It does not modify your shell environment. Check or remove it with `ahub auth status` and `ahub auth remove deepseek`. Legacy project-only `.ahub/secrets.json` keys remain supported and take priority.
@@ -229,6 +245,17 @@ ahub config
 
 The menu asks which agent, CLI, and model to use. DeepSeek setup and project credentials live in the same place.
 
+### Managing many models
+
+ahub separates four decisions that are often mixed together:
+
+1. **Providers** — registered OpenAI-compatible endpoints (DeepSeek is built in; add more with `ahub provider add`). A model can be delegated in `@ahub` only when its provider is registered **and** connected.
+2. **Provider connections** — where credentials and connectivity are managed, per provider.
+3. **Model library** — aliases, display names, model IDs, tags, favorites, and visibility.
+4. **Active model & usage defaults** — the sticky current model that `@ahub /ds` and a bare `@ahub` delegate to, plus which model each agent uses.
+
+Open `ahub → Model library` to browse, add, search, favorite, hide, or set the active model. Hidden models remain configured but disappear from everyday pickers. Assigned and favorite models are shown first; the picker shows provider and tags inline, and becomes searchable when the library grows beyond eight choices.
+
 The commands below are scripting interfaces; ordinary users do not need them. To list active values:
 
 ```bash
@@ -248,6 +275,16 @@ Create a reusable model alias and make it the coder's persistent override:
 ```bash
 ahub model set myfast my-fast-model
 ahub agent set coder model myfast
+```
+
+Manage the library from scripts:
+
+```bash
+ahub model favorite myfast
+ahub model default myfast
+ahub model hide old-model
+ahub model show old-model
+ahub model remove old-model
 ```
 
 Set the model back to the Claude Code or Codex CLI default at any time:

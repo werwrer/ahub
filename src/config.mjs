@@ -8,10 +8,20 @@ export const DEFAULT_CONFIG = {
   },
   defaultSession: "main",
   defaultContext: "summary",
+  defaults: {
+    externalModel: "ds4f",
+    activeModel: "ds4f",
+  },
+  providers: {
+    deepseek: { label: "DeepSeek", baseUrl: "https://api.deepseek.com", kind: "openai" },
+  },
   models: {
     ds4f: {
+      name: "DeepSeek V4 Flash",
       provider: "deepseek",
       model: "deepseek-v4-flash",
+      tags: ["fast", "low-cost"],
+      favorite: true,
     },
   },
   profiles: {
@@ -35,7 +45,7 @@ export const DEFAULT_CONFIG = {
     "/cx": "cli:codex",
   },
   shortcuts: {
-    "/ds": { model: "ds4f" },
+    "/ds": { model: "external" },
     "/native": { model: "native" },
     "/brief": { contextMode: "brief" },
     "/related": { contextMode: "related" },
@@ -74,42 +84,76 @@ export const DEFAULT_CONFIG = {
 };
 
 function mergeConfig(value = {}) {
+  // Tolerate a config file that contains a non-object (null/array/scalar) without crashing.
+  const source = (value && typeof value === "object" && !Array.isArray(value)) ? value : {};
   const agents = Object.fromEntries(
-    Object.entries({ ...DEFAULT_CONFIG.agents, ...value.agents }).map(([name, agent]) => [
+    Object.entries({ ...DEFAULT_CONFIG.agents, ...source.agents }).map(([name, agent]) => [
       name,
       { ...(DEFAULT_CONFIG.agents[name] ?? {}), ...agent },
     ]),
   );
+  const defaults = { ...DEFAULT_CONFIG.defaults, ...source.defaults };
+  // activeModel is the canonical "current model"; externalModel is a legacy alias kept in sync.
+  if (!defaults.activeModel) defaults.activeModel = defaults.externalModel ?? DEFAULT_CONFIG.defaults.activeModel;
+  if (!defaults.externalModel) defaults.externalModel = defaults.activeModel;
+  // Merge per-key runtime defaults, then spread any non-builtin runtime keys the user added.
+  const extraRuntimes = Object.fromEntries(Object.entries(source.runtimes ?? {}).filter(([key]) => !(key in DEFAULT_CONFIG.runtimes)));
   return {
     ...DEFAULT_CONFIG,
-    ...value,
-    ui: { ...DEFAULT_CONFIG.ui, ...value.ui },
+    ...source,
+    ui: { ...DEFAULT_CONFIG.ui, ...source.ui },
+    defaults,
+    providers: { ...DEFAULT_CONFIG.providers, ...source.providers },
     agents,
-    models: { ...DEFAULT_CONFIG.models, ...value.models },
-    profiles: { ...DEFAULT_CONFIG.profiles, ...value.profiles },
-    commands: { ...DEFAULT_CONFIG.commands, ...value.commands },
-    shortcuts: { ...DEFAULT_CONFIG.shortcuts, ...value.shortcuts },
+    models: { ...DEFAULT_CONFIG.models, ...source.models },
+    profiles: { ...DEFAULT_CONFIG.profiles, ...source.profiles },
+    commands: { ...DEFAULT_CONFIG.commands, ...source.commands },
+    shortcuts: { ...DEFAULT_CONFIG.shortcuts, ...source.shortcuts },
     runtimes: {
-      claude: { ...DEFAULT_CONFIG.runtimes.claude, ...value.runtimes?.claude },
-      codex: { ...DEFAULT_CONFIG.runtimes.codex, ...value.runtimes?.codex },
-      deepseek: { ...DEFAULT_CONFIG.runtimes.deepseek, ...value.runtimes?.deepseek },
-      ...value.runtimes,
+      claude: { ...DEFAULT_CONFIG.runtimes.claude, ...source.runtimes?.claude },
+      codex: { ...DEFAULT_CONFIG.runtimes.codex, ...source.runtimes?.codex },
+      deepseek: { ...DEFAULT_CONFIG.runtimes.deepseek, ...source.runtimes?.deepseek },
+      ...extraRuntimes,
     },
   };
 }
 
+export const CURRENT_CONFIG_VERSION = 1;
+
+// Ordered migrations from one schema version to the next. Each entry upgrades a config
+// whose version is below `version` to exactly `version`. Add new entries here when the
+// schema changes; bump CURRENT_CONFIG_VERSION to match the last entry.
+const migrations = [
+  { version: 1, migrate: (config) => ({ ...config, version: 1 }) },
+];
+
+// Validate and forward-migrate a config. Refuses configs written by a newer ahub
+// (which could be silently mis-merged) instead of guessing.
+export function migrateConfig(input = {}) {
+  const declared = Number(input?.version) || 0;
+  if (declared > CURRENT_CONFIG_VERSION) {
+    throw new Error(`ahub config version ${declared} is newer than this ahub supports (v${CURRENT_CONFIG_VERSION}). Upgrade ahub (\`npm i -g @haruw/ahub\`) or remove ${"<root>/.ahub/config.json"} to reset.`);
+  }
+  let config = { ...input };
+  for (const step of migrations) {
+    if (declared < step.version) config = step.migrate(config);
+  }
+  return { ...config, version: CURRENT_CONFIG_VERSION };
+}
+
 export async function loadConfig(root) {
   try {
-    return mergeConfig(JSON.parse(await readFile(paths(root).config, "utf8")));
+    return migrateConfig(mergeConfig(JSON.parse(await readFile(paths(root).config, "utf8"))));
   } catch (error) {
-    if (error.code === "ENOENT") return mergeConfig();
+    if (error.code === "ENOENT") return migrateConfig(mergeConfig());
     if (error instanceof SyntaxError) throw new Error(`invalid config: ${paths(root).config}`);
     throw error;
   }
 }
 
 export async function saveConfig(root, config) {
-  await writeFile(paths(root).config, `${JSON.stringify(config, null, 2)}\n`);
+  const stamped = { ...config, version: CURRENT_CONFIG_VERSION };
+  await writeFile(paths(root).config, `${JSON.stringify(stamped, null, 2)}\n`);
 }
 
 export function resolveAgent(config, name) {
@@ -148,4 +192,38 @@ export function resolveProfileCommand(config, task) {
 export function resolveConfiguredModel(config, value) {
   if (!value || value === "inherit") return undefined;
   return config.models[value] ?? { model: value };
+}
+
+export function modelLabel(alias, model, providers = {}) {
+  const title = model.name ?? alias;
+  const providerConf = model.provider ? providers[model.provider] : undefined;
+  const source = providerConf?.label ?? model.provider ?? "host CLI";
+  const tags = Array.isArray(model.tags) && model.tags.length ? ` · ${model.tags.join(", ")}` : "";
+  const costPerM = typeof model.cost === "number" ? model.cost : (model.cost && (model.cost.output ?? model.cost.input));
+  const costHint = costPerM ? ` · $${costPerM}/M` : "";
+  // Lead with the alias when it differs from the display name, so the picker is searchable by alias.
+  const prefix = alias && title !== alias ? `${alias} · ` : "";
+  return `${model.favorite ? "★ " : ""}${prefix}${title} · ${model.model} · ${source}${costHint}${tags}`;
+}
+
+// Pick a fallback active model when the current one is being hidden or removed.
+// Returns the first provider-backed, visible alias (preferring favorites), or undefined.
+export function fallbackActiveModel(config, exclude) {
+  const entries = Object.entries(config.models ?? {})
+    .filter(([alias, model]) => alias !== exclude && model.provider && model.enabled !== false)
+    .sort(([, a], [, b]) => Number(Boolean(b.favorite)) - Number(Boolean(a.favorite)));
+  return entries[0]?.[0];
+}
+
+export function modelChoices(config, options = {}) {
+  const providers = config.providers ?? {};
+  const assigned = new Set(Object.values(config.agents ?? {}).map((agent) => agent.model).filter(Boolean));
+  return Object.entries(config.models)
+    .filter(([, model]) => model.enabled !== false)
+    .filter(([alias, model]) => options.filter ? options.filter(alias, model) : true)
+    .sort(([aliasA, a], [aliasB, b]) => {
+      const rank = (alias, model) => (assigned.has(alias) ? 0 : model.favorite ? 1 : 2);
+      return rank(aliasA, a) - rank(aliasB, b) || (a.name ?? aliasA).localeCompare(b.name ?? aliasB);
+    })
+    .map(([alias, model]) => ({ name: modelLabel(alias, model, providers), value: alias, ...(options.description ? { description: options.description(alias, model) } : {}) }));
 }

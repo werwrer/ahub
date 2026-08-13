@@ -39,6 +39,21 @@ export function createPrompts(input = process.stdin, output = process.stdout) {
       output.write("Please enter one of the listed numbers.\n");
     }
   };
+  const search = async (message, choices) => {
+    const normalized = choices.map((choice) => ({ ...choice, name: choice.name ?? choice.label }));
+    if (!terminal || normalized.length <= 8) return select(message, normalized);
+    return run({
+      type: "search",
+      name: "value",
+      message,
+      pageSize: 12,
+      source: async (term = "") => {
+        const query = term.trim().toLocaleLowerCase();
+        return query ? normalized.filter((choice) => choice.name.toLocaleLowerCase().includes(query)) : normalized;
+      },
+      theme: { helpMode: "never" },
+    });
+  };
   const confirm = (message, initial = true) => terminal
     ? run({ type: "confirm", name: "value", message, default: initial })
     : Promise.resolve(initial);
@@ -49,5 +64,5 @@ export function createPrompts(input = process.stdin, output = process.stdout) {
     ? run({ type: "checkbox", name: "value", message, choices: choices.map((choice) => ({ ...choice, name: choice.name ?? choice.label })), loop: false, instructions: false, validate: (items) => items.length ? true : "Select at least one option" })
     : Promise.resolve(choices.filter((choice) => choice.checked).map((choice) => choice.value));
 
-  return { ask, select, confirm, password, checkbox, interactive: terminal };
+  return { ask, select, search, confirm, password, checkbox, interactive: terminal };
 }
