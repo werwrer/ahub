@@ -1,8 +1,10 @@
 import { createInterface } from "node:readline/promises";
-import inquirer from "inquirer";
+import { createPromptModule } from "inquirer";
 
 function normalizeError(error) {
-  if (error?.name === "ExitPromptError") throw Object.assign(new Error("cancelled"), { code: "CANCELLED" });
+  if (error?.name === "ExitPromptError" || error?.name === "AbortPromptError" || error?.name === "CancelPromptError") {
+    throw Object.assign(new Error("cancelled"), { code: "CANCELLED" });
+  }
   throw error;
 }
 
@@ -42,10 +44,23 @@ export function createPrompts(input = process.stdin, output = process.stdout) {
     }
   };
   const run = async (question) => {
+    // inquirer 12 only throws ExitPromptError on Ctrl+C — it ignores a plain Escape.
+    // Watch the raw keypress stream and abort the prompt on Esc, which surfaces as
+    // AbortPromptError and is normalized to CANCELLED (i.e. "back").
+    // NOTE: inquirer.prompt() ignores a third context argument in this version; the
+    // streams/signal must be wired through createPromptModule(opt) instead.
+    const controller = new AbortController();
+    const onKeypress = (_str, key) => {
+      if (key?.name === "escape" || key?.sequence === "\x1b") controller.abort();
+    };
+    if (input?.on) input.on("keypress", onKeypress);
     try {
-      return (await inquirer.prompt([question], {}, { input, output })).value;
+      const promptModule = createPromptModule({ input, output, signal: controller.signal });
+      return (await promptModule([question], {})).value;
     } catch (error) {
       return normalizeError(error);
+    } finally {
+      if (input?.off) input.off("keypress", onKeypress);
     }
   };
 
