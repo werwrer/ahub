@@ -6,6 +6,26 @@ function normalizeError(error) {
   throw error;
 }
 
+// Esc (or Ctrl+C) in a menu navigates back: resolve to the choice that is a back/exit item.
+const BACK_VALUES = ["back", "exit", "__back__"];
+function cancelFallback(choices) {
+  for (const key of BACK_VALUES) {
+    const choice = choices.find((item) => item.value === key);
+    if (choice) return choice.value;
+  }
+  return undefined;
+}
+async function guardBack(runPromise, choices) {
+  try {
+    return await runPromise;
+  } catch (error) {
+    if (error?.code !== "CANCELLED") throw error;
+    const back = cancelFallback(choices);
+    if (back !== undefined) return back;
+    throw error;
+  }
+}
+
 export function createPrompts(input = process.stdin, output = process.stdout) {
   const terminal = Boolean(input.isTTY && output.isTTY);
   const askFallback = async (message) => {
@@ -29,7 +49,7 @@ export function createPrompts(input = process.stdin, output = process.stdout) {
     : askFallback(message);
   const select = async (message, choices) => {
     const normalized = choices.map((choice) => ({ ...choice, name: choice.name ?? choice.label }));
-    if (terminal) return run({ type: "select", name: "value", message, choices: normalized, pageSize: 12, loop: true, theme: { helpMode: "never" } });
+    if (terminal) return guardBack(run({ type: "select", name: "value", message, choices: normalized, pageSize: 12, loop: true, theme: { helpMode: "never" } }), choices);
     output.write(`\n${message}\n`);
     choices.forEach((choice, index) => output.write(`  ${index + 1}. ${choice.name ?? choice.label}\n`));
     while (true) {
@@ -42,7 +62,7 @@ export function createPrompts(input = process.stdin, output = process.stdout) {
   const search = async (message, choices) => {
     const normalized = choices.map((choice) => ({ ...choice, name: choice.name ?? choice.label }));
     if (!terminal || normalized.length <= 8) return select(message, normalized);
-    return run({
+    return guardBack(run({
       type: "search",
       name: "value",
       message,
@@ -52,7 +72,7 @@ export function createPrompts(input = process.stdin, output = process.stdout) {
         return query ? normalized.filter((choice) => choice.name.toLocaleLowerCase().includes(query)) : normalized;
       },
       theme: { helpMode: "never" },
-    });
+    }), normalized);
   };
   const confirm = (message, initial = true) => terminal
     ? run({ type: "confirm", name: "value", message, default: initial })
@@ -61,7 +81,7 @@ export function createPrompts(input = process.stdin, output = process.stdout) {
     ? run({ type: "password", name: "value", message, mask: "•", validate: (value) => value.trim() ? true : "API key cannot be empty" })
     : askFallback(message);
   const checkbox = (message, choices) => terminal
-    ? run({ type: "checkbox", name: "value", message, choices: choices.map((choice) => ({ ...choice, name: choice.name ?? choice.label })), loop: true, instructions: false, validate: (items) => items.length ? true : "Select at least one option" })
+    ? guardBack(run({ type: "checkbox", name: "value", message, choices: choices.map((choice) => ({ ...choice, name: choice.name ?? choice.label })), loop: true, instructions: false, validate: (items) => items.length ? true : "Select at least one option" }), choices)
     : Promise.resolve(choices.filter((choice) => choice.checked).map((choice) => choice.value));
 
   return { ask, select, search, confirm, password, checkbox, interactive: terminal };
