@@ -29,7 +29,7 @@ export function createPrompts(input = process.stdin, output = process.stdout) {
     : askFallback(message);
   const select = async (message, choices) => {
     const normalized = choices.map((choice) => ({ ...choice, name: choice.name ?? choice.label }));
-    if (terminal) return run({ type: "select", name: "value", message, choices: normalized, pageSize: 12, loop: false, theme: { helpMode: "never" } });
+    if (terminal) return run({ type: "select", name: "value", message, choices: normalized, pageSize: 12, loop: true, theme: { helpMode: "never" } });
     output.write(`\n${message}\n`);
     choices.forEach((choice, index) => output.write(`  ${index + 1}. ${choice.name ?? choice.label}\n`));
     while (true) {
@@ -61,7 +61,7 @@ export function createPrompts(input = process.stdin, output = process.stdout) {
     ? run({ type: "password", name: "value", message, mask: "•", validate: (value) => value.trim() ? true : "API key cannot be empty" })
     : askFallback(message);
   const checkbox = (message, choices) => terminal
-    ? run({ type: "checkbox", name: "value", message, choices: choices.map((choice) => ({ ...choice, name: choice.name ?? choice.label })), loop: false, instructions: false, validate: (items) => items.length ? true : "Select at least one option" })
+    ? run({ type: "checkbox", name: "value", message, choices: choices.map((choice) => ({ ...choice, name: choice.name ?? choice.label })), loop: true, instructions: false, validate: (items) => items.length ? true : "Select at least one option" })
     : Promise.resolve(choices.filter((choice) => choice.checked).map((choice) => choice.value));
 
   return { ask, select, search, confirm, password, checkbox, interactive: terminal };
