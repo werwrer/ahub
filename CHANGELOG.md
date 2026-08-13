@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.2 — 2026-08-13
+
+- **Terminal interaction overhaul** (informed by gh CLI, Vercel CLI, and clack research): clack-style `◆`/`└` session framing via chalk (no new dependency); Esc = back one level, Ctrl+C = exit (per Go promptui / gh convention); menu labels trimmed to action names with separator-grouped lists; always-visible minimal key hint (`↑↓ · Enter · Esc`); shared 14-char column width across agents/models/providers; search/filter threshold lowered from >8 to >4 items; bilingual language menu label.
+- **Add-model wizard**: host-default (inherit) is the first source; registered providers (DeepSeek direct) listed inline with ●/○ readiness; official catalog vs custom split.
+- **Provider catalog**: `ahub provider add <name>` auto-fills the default base URL for 14 well-known OpenAI-compatible providers (`ahub provider catalog`).
+
 ## 0.7.1 — 2026-08-13
 
 - **Backup vs handover, separated**: delegations now store the **full** redacted context (no 16k cap), and two distinct capabilities replace the old conflated export: `backup` (lossless JSON snapshot of delegations + terminal sessions + config to `.ahub/backups/`; credentials deliberately excluded; MCP `backup` tool + `ahub backup`) and `export` (the readable Markdown handover document for other AI clients, unchanged).

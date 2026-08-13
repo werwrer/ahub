@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-当前版本：**0.7.1**
+当前版本：**0.7.2**
 
 在 Codex 或 Claude Code 里使用 DeepSeek 及其它模型，不丢失当前对话的上下文。
 

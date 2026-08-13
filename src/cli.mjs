@@ -632,7 +632,7 @@ async function controlCenter(root, options = {}) {
     const config = await loadConfig(root);
     const t = translator(config.ui?.language ?? inferLanguage());
     clearScreen();
-    intro(`${chalk.bold("ahub")} ${chalk.dim(`v0.7.1`)}  ${chalk.dim(root)}`);
+    intro(`${chalk.bold("ahub")} ${chalk.dim(`v0.7.2`)}  ${chalk.dim(root)}`);
   }
   do {
     const config = await loadConfig(root);
@@ -720,7 +720,7 @@ async function onboarding(root, config, available, options = {}) {
   const t = translator(language);
   if (!options.quietUi) {
     clearScreen();
-    banner("0.7.1", t("tagline"));
+    banner("0.7.2", t("tagline"));
     section(t("quick1"), t("quick1Sub"));
   }
   const choices = [];

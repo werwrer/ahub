@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Current version: **0.7.1**
+Current version: **0.7.2**
 
 Use DeepSeek and other models inside Codex or Claude Code without losing the context of your current conversation.
 
