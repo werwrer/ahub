@@ -35,7 +35,7 @@ ahub
 在引导菜单里：
 
 1. 选择 中文 或 English。
-2. 如果要使用 DeepSeek，在「模型库 → Provider 连接」中连接。
+2. 如果要使用 DeepSeek，在「Providers」中连接。
 3. 选择「安装集成」，把 ahub 安装到 Codex、Claude Code 或两者。
 4. 新建一个 Codex 任务或 Claude Code 会话。
 
@@ -87,27 +87,28 @@ ahub
 ```
 
 ```text
-当前项目
-  智能体           终端     模型
-  architect       claude   inherit
-  coder           codex    ds4f
-  reviewer        claude   inherit
+◆  ahub  v0.8.0  ·  /你的项目
 
-  Provider        状态
-  DeepSeek        ● 已连接
+  当前模型      ★ DeepSeek V4 Flash · DeepSeek ●
+  智能体        architect → claude   coder → codex   reviewer → claude
+  Providers     DeepSeek ●
+  ──────────────────────────────────────────────
 
-  当前模型  DeepSeek V4 Flash (ds4f) · $0.14/M
-
-? 控制中心
-❯ ＋ 添加模型 / Provider  一步向导：供应商 → 模型 → key → 收尾
-  ▶  运行智能体          启动 architect、coder 或 reviewer
-  ⚙  智能体设置          选择默认终端和模型
-  ◇  模型库              搜索、收藏和管理所有模型
-  ⌁  快捷预设            组合模型、上下文和智能体角色
-  ＋ 安装集成            添加到 Claude Code 或 Codex
-  ●  状态与诊断          检查配置和安装状态
-  文  语言 / Language    切换中文或 English
-  ×  退出
+│  ahub 控制中心
+│  ■ 运行任务           派活给 architect / coder / reviewer
+│    添加模型           选供应商 → 填 key → 建模型
+│    切换当前模型       ★ DeepSeek V4 Flash
+│    ──────────────────────
+│    模型库             收藏、隐藏、删除模型
+│    Providers          API 密钥与接入点
+│    智能体设置         改各角色的终端和模型
+│    快捷预设           组合模型+上下文+角色的 /名字
+│    ──────────────────────
+│    安装集成           安装到 Claude Code 或 Codex
+│    状态与诊断         查看完整配置和集成状态
+│    语言 / Language    切换中文 / English
+│    退出
+└
 ```
 
 设置向导处理初始流程：
@@ -174,7 +175,7 @@ Claude Code 在新会话或执行 `/reload-plugins` 后加载 ahub；Codex 在�
 
 也就是说 `@ahub-coder /cc 修复测试` 使用 Claude Code 及其自带模型；只有 `@ahub-coder /ds4f /cc 修复测试` 才会显式把模型覆盖为 DeepSeek V4 Flash。
 
-从终端菜单选择「模型库 → Provider 连接 → DeepSeek → 连接」。ahub 会先验证密钥再保存，然后询问是否把 DeepSeek 分配给某个智能体。等价的脚本命令是：
+从终端菜单选择「Providers → DeepSeek → 连接」。ahub 会先验证密钥再保存，然后询问是否把 DeepSeek 分配给某个智能体。等价的脚本命令是：
 
 ```bash
 ahub auth set deepseek
@@ -271,7 +272,7 @@ ahub 把容易混在一起的四件事拆开：
 3. **模型库** — 别名、显示名称、模型 ID、标签、收藏和可见性。
 4. **当前模型与使用默认值** — `@ahub /ds` 和裸 `@ahub` 委派到的粘性当前模型，以及每个智能体使用的模型。
 
-打开 `ahub → 模型库` 可以浏览、添加、搜索、收藏、隐藏模型或设置当前模型。隐藏不会删除配置，只是不再出现在日常选择器中。已被智能体使用的模型和收藏模型会排在前面；选择器内联显示 provider 和标签，模型超过 8 个后自动支持输入搜索。
+打开 `ahub → 模型库` 可以浏览、添加、收藏、隐藏或删除模型；「切换当前模型」直接放在主菜单上。隐藏不会删除配置，只是不再出现在日常选择器中。已被智能体使用的模型和收藏模型会排在前面；选择器内联显示 provider 和标签，模型超过 8 个后自动支持输入搜索。
 
 下面的命令是脚本接口，普通用户不需要。列出当前值：
 

@@ -35,7 +35,7 @@ ahub
 In the guided menu:
 
 1. Select 中文 or English.
-2. Connect DeepSeek under **Model library → Provider connections** if you want to use it.
+2. Connect DeepSeek under **Providers** if you want to use it.
 3. Choose **Install integrations** and install ahub into Codex, Claude Code, or both.
 4. Start a new Codex task or Claude Code session.
 
@@ -87,27 +87,28 @@ ahub
 ```
 
 ```text
-This project
-  Agent            CLI      Model
-  architect        claude   inherit
-  coder            codex    ds4f
-  reviewer         claude   inherit
+◆  ahub  v0.8.0  ·  /your/project
 
-  Providers        Status
-  DeepSeek         ● connected
+  Active model  ★ DeepSeek V4 Flash · DeepSeek ●
+  Agents        architect → claude   coder → codex   reviewer → claude
+  Providers     DeepSeek ●
+  ──────────────────────────────────────────────
 
-  Active model  DeepSeek V4 Flash (ds4f) · $0.14/M
-
-? Control center
-❯ ＋ Add model / provider  One wizard: provider → model → key → wrap-up
-  ▶  Run an agent          Start architect, coder, or reviewer
-  ⚙  Agent settings        Choose default CLI and model
-  ◇  Model library         Search, favorite, and manage every model
-  ⌁  Shortcut presets      Combine model, context, and agent role
-  ＋ Install integrations  Add ahub to Claude Code or Codex
-  ●  Status & doctor       Check configuration and integrations
-  文  Language / 语言       Switch between English and 中文
-  ×  Exit
+│  ahub control center
+│  ■ Run an agent           start architect / coder / reviewer
+│    Add model              provider → key → model
+│    Switch active model    ★ DeepSeek V4 Flash
+│    ──────────────────────
+│    Model library          favorite, hide, or remove models
+│    Providers              API keys and endpoints
+│    Agent settings         change each role's CLI and model
+│    Shortcuts              combine model+context+role as /name
+│    ──────────────────────
+│    Install integrations   install into Claude Code or Codex
+│    Status & diagnostics   view full config and integration status
+│    语言 / Language         switch 中文 / English
+│    Exit
+└
 ```
 
 The setup wizard handles the initial flow:
@@ -174,7 +175,7 @@ Commands are composable and represent separate dimensions:
 
 This means `@ahub-coder /cc Fix the tests` uses Claude Code and its own configured model. Only `@ahub-coder /ds4f /cc Fix the tests` explicitly overrides that model with DeepSeek V4 Flash.
 
-Choose **Model library → Provider connections → DeepSeek → Connect** in the terminal menu. ahub validates the key before saving it, then offers to assign DeepSeek to an agent. The equivalent scripting command is:
+Choose **Providers → DeepSeek → Connect** in the terminal menu. ahub validates the key before saving it, then offers to assign DeepSeek to an agent. The equivalent scripting command is:
 
 ```bash
 ahub auth set deepseek
@@ -271,7 +272,7 @@ ahub separates four decisions that are often mixed together:
 3. **Model library** — aliases, display names, model IDs, tags, favorites, and visibility.
 4. **Active model & usage defaults** — the sticky current model that `@ahub /ds` and a bare `@ahub` delegate to, plus which model each agent uses.
 
-Open `ahub → Model library` to browse, add, search, favorite, hide, or set the active model. Hidden models remain configured but disappear from everyday pickers. Assigned and favorite models are shown first; the picker shows provider and tags inline, and becomes searchable when the library grows beyond eight choices.
+Open `ahub → Model library` to browse, add, favorite, hide, or remove models; **Switch active model** sits directly on the main menu. Hidden models remain configured but disappear from everyday pickers. Assigned and favorite models are shown first; the picker shows provider and tags inline, and becomes searchable when the library grows beyond eight choices.
 
 The commands below are scripting interfaces; ordinary users do not need them. To list active values:
 

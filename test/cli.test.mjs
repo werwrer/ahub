@@ -982,7 +982,8 @@ test("menu adds a catalog provider with just a key (no manual base URL)", async 
   console.log = () => {};
   try {
     await main(["init"], { root });
-    const selections = ["models", "providers", "__add__", "catalog", "openai", "__back__", "exit"];
+    // Providers is a top-level main-menu entry now (it used to live under Model library).
+    const selections = ["providers", "__add__", "catalog", "openai", "__back__", "exit"];
     const prompts = {
       select: async () => selections.shift(),
       ask: async () => "",

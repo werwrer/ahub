@@ -1,9 +1,6 @@
 import chalk from "chalk";
 import ora from "ora";
 
-const width = 58;
-const line = "─".repeat(width);
-
 // Shared column width for aligned output (agents, providers, models).
 export const COL = 14;
 
@@ -11,7 +8,9 @@ export function clearScreen() {
   if (process.stdout.isTTY) process.stdout.write("\x1b[2J\x1b[H");
 }
 
-// clack-style session framing (no dependency — just chalk).
+// clack-style chrome (chalk only, no prompt dependency). The status strip that opens every
+// control-center loop uses the same ◆ │ └ frame the prompts render with, so menu and data
+// read as one surface.
 export function intro(title) {
   console.log(chalk.cyan(`\n  ◆  ${chalk.bold(title)}`));
   console.log(chalk.cyan("  │"));
@@ -21,21 +20,31 @@ export function outro(message = "") {
   console.log(chalk.cyan(`  └  ${chalk.dim(message)}`));
 }
 
-export function banner(version = "", tagline = "Your coding agents, one simple control center") {
-  console.log(chalk.cyan.bold("\n  ┌──────────────────────────────────────────────────────────┐"));
-  console.log(chalk.cyan.bold("  │") + chalk.white.bold("   ahub") + chalk.dim(`   ${tagline}`));
-  console.log(chalk.cyan.bold("  └──────────────────────────────────────────────────────────┘") + (version ? chalk.dim(`  v${version}`) : ""));
+// One-line session header: version and project always visible, no ASCII box.
+export function header(version, projectDir) {
+  console.log(chalk.cyan(`\n  ◆  ${chalk.bold("ahub")}${version ? chalk.dim(`  v${version}`) : ""}${projectDir ? chalk.dim(`  ·  ${projectDir}`) : ""}`));
+}
+
+// Key-value row for the status strip: label in dim, value regular — aligned, no borders.
+// Padding is by display width (CJK counts double), so Chinese and ASCII labels line up.
+const LABEL_WIDTH = 12; // fits "Active model" (en) and "当前模型" (zh) alike
+const displayWidth = (text) => [...text].reduce((width, ch) => width + (ch.codePointAt(0) > 0xff ? 2 : 1), 0);
+export function row(label, value) {
+  console.log(`  ${chalk.dim(label)}${" ".repeat(Math.max(1, LABEL_WIDTH - displayWidth(label) + 2))}${value}`);
+}
+
+export function divider() {
+  console.log(chalk.dim(`  ${"─".repeat(46)}`));
 }
 
 export function section(title, subtitle) {
-  console.log(`\n${chalk.cyan.bold(title)}`);
-  console.log(chalk.dim(line));
-  if (subtitle) console.log(chalk.dim(subtitle));
+  console.log(`\n${chalk.cyan.bold(`  ◆  ${title}`)}`);
+  if (subtitle) console.log(chalk.dim(`     ${subtitle}`));
 }
 
 export function hint(value) { console.log(chalk.dim(`\n  ${value}`)); }
-export function success(value) { console.log(chalk.green(`\n  ✓ ${value}`)); }
-export function warning(value) { console.log(chalk.yellow(`\n  ! ${value}`)); }
+export function success(value) { console.log(chalk.green(`  ✓ ${value}`)); }
+export function warning(value) { console.log(chalk.yellow(`  ! ${value}`)); }
 
 export function statusMark(state, labels = {}) {
   if (state === "ready" || state === "installed" || state === true) return chalk.green(labels.ready ?? "● Ready");

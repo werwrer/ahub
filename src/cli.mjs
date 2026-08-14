@@ -5,13 +5,12 @@ import chalk from "chalk";
 import { DEFAULT_CONFIG, fallbackActiveModel, loadConfig, modelChoices, modelDetail, modelLabel, modelShort, resolveAgent, resolveConfiguredModel, resolveProfileCommand, saveConfig } from "./config.mjs";
 import { PROVIDER_CATALOG, catalogChoices, catalogEntry } from "./catalog.mjs";
 import { buildExportMarkdown, backupWorkspace, exportDelegations, writeBackupFile, writeExportFile } from "../plugins/ahub/server/ahub-mcp.mjs";
-import { Separator } from "@inquirer/core";
 import { compileContext } from "./context.mjs";
 import { commandVersion, runRuntime } from "./runtimes.mjs";
 import { getProviderCredential, getProviderSecret, loadSecrets, readHidden, removeProviderSecret, setProviderSecret } from "./secrets.mjs";
 import { validateProviderCredential } from "./providers.mjs";
 import { createPrompts } from "./prompts.mjs";
-import { banner, clearScreen, COL, hint, intro, outro, section, spinner, statusMark, success, warning } from "./ui.mjs";
+import { clearScreen, COL, divider, header, hint, outro, row, section, spinner, statusMark, success, warning } from "./ui.mjs";
 import { inferLanguage, translator } from "./i18n.mjs";
 import { emptyState, exists, findSession, loadState, migrateLegacyState, mutate, paths, saveState } from "./store.mjs";
 
@@ -65,6 +64,11 @@ Automation and advanced commands:
   ahub demo
 
 Runtimes: claude, codex, mock`;
+
+const VERSION = "0.8.0";
+
+// Visual group break inside a select menu (rendered as a non-focusable dash row).
+const menuSeparator = () => ({ type: "separator" });
 
 function flag(args, name, fallback) {
   const index = args.indexOf(name);
@@ -277,8 +281,16 @@ async function configureProviders(root, prompts, t, options = {}) {
     const config = await loadConfig(root);
     const providers = config.providers ?? {};
     const keys = Object.keys(providers);
+    const readiness = {};
+    await Promise.all(keys.map(async (key) => {
+      readiness[key] = Boolean(await getProviderSecret(root, key, options));
+    }));
     const choices = [
-      ...keys.map((key) => ({ name: `${providers[key].label ?? key} · ${providers[key].baseUrl ?? ""}`, value: key })),
+      ...keys.map((key) => ({
+        name: providers[key].label ?? key,
+        value: key,
+        hint: `${readiness[key] ? t("connectedShort") : t("notConnectedShort")} · ${providers[key].baseUrl ?? ""}`,
+      })),
       { name: t("providerAdd"), value: "__add__" },
       { name: t("back"), value: "__back__" },
     ];
@@ -310,28 +322,30 @@ async function configureProviders(root, prompts, t, options = {}) {
   } while (prompts.interactive);
 }
 
-// Compact state dashboard rendered above every control-center action, so the user sees
-// agents, provider readiness, and the active model at a glance instead of drilling into
-// "status" to find out.
-async function renderDashboard(root, config, t, options) {
+// Compact status strip rendered above the main menu on every control-center loop, so the
+// active model, agent routing, and provider readiness are always current (never stale from
+// a previous action). Three rows, no boxes — the menu below carries the interaction.
+async function renderStatusStrip(root, config, t, options) {
   const providers = config.providers ?? {};
   const readiness = {};
   await Promise.all(Object.keys(providers).map(async (key) => {
     readiness[key] = Boolean(await getProviderSecret(root, key, options));
   }));
-  section(t("dashboardTitle"));
-  console.log(`\n${t("agents")}`);
-  for (const [name, agent] of Object.entries(config.agents)) {
-    console.log(`  ${name.padEnd(COL)} ${(agent.cli ?? agent.runtime).padEnd(8)} ${agent.model ?? "inherit"}`);
-  }
-  if (Object.keys(providers).length) {
-    console.log(`\n${t("providersTitle")}`);
-    for (const [key, conf] of Object.entries(providers)) {
-      console.log(`  ${(conf.label ?? key).padEnd(14)} ${readiness[key] ? t("connectedShort") : t("notConnectedShort")}`);
-    }
-  }
+  header(VERSION, root);
   const active = config.models[config.defaults.activeModel];
-  console.log(`\n${t("activeModel")}  ${active ? modelShort(config.defaults.activeModel, active) : config.defaults.activeModel}\n`);
+  const source = active?.provider ? (providers[active.provider]?.label ?? active.provider) : t("hostCliShort");
+  const mark = active?.provider ? (readiness[active.provider] ? chalk.green("●") : chalk.yellow("○")) : "";
+  row(t("activeModel"), `${active ? modelShort(config.defaults.activeModel, active) : config.defaults.activeModel} · ${source}${mark ? ` ${mark}` : ""}`);
+  const agentsLine = Object.entries(config.agents)
+    .map(([name, agent]) => `${name} → ${agent.cli ?? agent.runtime}${agent.model && agent.model !== "inherit" ? ` · ${agent.model}` : ""}`)
+    .join("   ");
+  row(t("agents"), agentsLine);
+  if (Object.keys(providers).length) {
+    row(t("providersTitle"), Object.entries(providers)
+      .map(([key, conf]) => `${conf.label ?? key} ${readiness[key] ? chalk.green("●") : chalk.yellow("○")}`)
+      .join("   "));
+  }
+  divider();
 }
 
 // Step 1 of the add-model wizard: where does the model run? Registered providers are listed
@@ -345,7 +359,11 @@ async function chooseProviderSource(root, config, prompts, t, options) {
   }));
   const source = await prompts.select(t("modelSource"), [
     { name: t("sourceHostDefault"), value: "inherit" },
-    ...Object.entries(providers).map(([key, conf]) => ({ name: `${conf.label ?? key} · ${conf.baseUrl ?? ""} · ${readiness[key] ? t("connectedShort") : t("notConnectedShort")}`, value: key })),
+    ...Object.entries(providers).map(([key, conf]) => ({
+      name: conf.label ?? key,
+      value: key,
+      hint: `${conf.baseUrl ?? ""} · ${readiness[key] ? t("connectedShort") : t("notConnectedShort")}`,
+    })),
     { name: t("sourceCatalog"), value: "catalog" },
     { name: t("sourceCustom"), value: "custom" },
   ]);
@@ -418,47 +436,34 @@ async function setupModelFlow(root, prompts, t, options = {}) {
   return alias;
 }
 
+// The most frequent configuration action lives directly on the main menu: pick a model,
+// done. Only delegatable (provider-backed) models qualify — same rule as `ahub model default`.
+async function switchActiveModel(root, prompts, t) {
+  const config = await loadConfig(root);
+  const delegatable = Object.entries(config.models).filter(([, model]) => model.provider && model.enabled !== false);
+  if (!delegatable.length) return warning(t("noDelegatableModels"));
+  const alias = await pickModel(prompts, t("setActiveModel"), config, [], { filter: (_alias, model) => Boolean(model.provider) });
+  config.defaults.activeModel = alias;
+  config.defaults.externalModel = alias;
+  await saveConfig(root, config);
+  success(t("activeModelSet", { alias }));
+}
+
 async function configureModels(root, prompts, t, options = {}) {
   const config = await loadConfig(root);
   const action = await prompts.select(t("modelLibrary"), [
-    { name: t("addModelAction"), value: "add" },
-    { name: t("manageModel"), value: "manage" },
-    { name: t("browseModels"), value: "browse" },
-    { name: t("providerConnections"), value: "providers" },
-    { name: t("setActiveModel"), value: "active" },
+    { name: t("addModelAction"), value: "add", hint: t("addModelDesc") },
+    { name: t("manageModel"), value: "manage", hint: t("modelSettingsDesc") },
     { name: t("back"), value: "back" },
   ]);
   if (action === "back") return;
-  if (action === "browse") return showConfig(root, config, t, options);
   if (action === "add") return setupModelFlow(root, prompts, t, options);
-  if (action === "manage") return manageModelLibrary(root, config, prompts, t);
-  if (action === "providers") return configureProviders(root, prompts, t, options);
-  if (action === "active") {
-    const delegatable = Object.entries(config.models).filter(([, model]) => model.provider && model.enabled !== false);
-    if (!delegatable.length) return warning(t("noDelegatableModels"));
-    const alias = await pickModel(prompts, t("setActiveModel"), config, [], { filter: (_alias, model) => Boolean(model.provider) });
-    config.defaults.activeModel = alias;
-    config.defaults.externalModel = alias;
-    await saveConfig(root, config);
-    return success(t("activeModelSet", { alias }));
-  }
+  return manageModelLibrary(root, config, prompts, t);
 }
 
-async function configure(root, options = {}) {
-  if (!(await exists(paths(root).state))) await init(root);
-  const prompts = options.prompts ?? createPrompts();
+// One agent's full configuration: which CLI it runs on and which model it uses.
+async function configureAgent(root, prompts, t, options = {}) {
   const config = await loadConfig(root);
-  const t = translator(config.ui?.language ?? inferLanguage());
-  const action = options.initialAction ?? await prompts.select(t("settings"), [
-    { name: t("agentsChoice"), value: "agent" },
-    { name: t("modelsChoice"), value: "models" },
-    { name: t("viewConfig"), value: "show" },
-    { name: t("back"), value: "back" },
-  ]);
-  if (action === "back") return;
-  if (action === "show") return showConfig(root, config, t, options);
-  if (action === "models") return configureModels(root, prompts, t, options);
-  // action === "agent" (the only remaining value) → configure one agent's CLI and model.
   const agentName = await prompts.select(t("whichAgent"), Object.keys(config.agents).map((name) => ({ label: t(name) !== name ? t(name) : name, value: name })));
   const cli = await prompts.select(t("whichCli"), [
     { label: "Claude Code", value: "claude" },
@@ -472,7 +477,28 @@ async function configure(root, options = {}) {
   config.agents[agentName].model = model;
   delete config.agents[agentName].runtime;
   await saveConfig(root, config);
-  success(`${agentName} → ${cli === "claude" ? "Claude Code" : "Codex"} · ${model === "inherit" ? "CLI's own model" : model}`);
+  success(`${agentName} → ${cli === "claude" ? "Claude Code" : "Codex"} · ${model === "inherit" ? t("inheritRow") : model}`);
+}
+
+// `ahub config` entry: the same destinations the main menu exposes directly, for users who
+// think of configuration as one place.
+async function configure(root, options = {}) {
+  if (!(await exists(paths(root).state))) await init(root);
+  const prompts = options.prompts ?? createPrompts();
+  const config = await loadConfig(root);
+  const t = translator(config.ui?.language ?? inferLanguage());
+  const action = await prompts.select(t("settings"), [
+    { name: t("agentSettings"), value: "agent", hint: t("agentSettingsDesc") },
+    { name: t("modelSettings"), value: "models", hint: t("modelSettingsDesc") },
+    { name: t("menuProviders"), value: "providers", hint: t("menuProvidersHint") },
+    { name: t("viewConfig"), value: "show" },
+    { name: t("back"), value: "back" },
+  ]);
+  if (action === "back") return;
+  if (action === "show") return showConfig(root, config, t, options);
+  if (action === "models") return configureModels(root, prompts, t, options);
+  if (action === "providers") return configureProviders(root, prompts, t, options);
+  return configureAgent(root, prompts, t, options);
 }
 
 async function installPlugin(target, options = {}) {
@@ -625,37 +651,32 @@ async function configureShortcuts(root, prompts, t) {
   hint(`@ahub ${name} …`);
 }
 
-// Give the user time to read output before the dashboard+menu replaces it.
-async function pauseForRead(prompts, t) {
-  await prompts.select(t("backToMenu"), [{ name: t("backToMenu"), value: "ok" }]);
-}
-
+// The control center: a flat main menu where the frequent actions (run, add model, switch
+// model) sit on top and everything else is one level deep at most. The status strip above
+// the menu is re-rendered every loop, so state is never stale; action output stays in the
+// scrollback above instead of being wiped by a redraw.
 async function controlCenter(root, options = {}) {
   const prompts = options.prompts ?? createPrompts();
   const repeat = options.loop ?? prompts.interactive === true;
-  if (!options.quietUi) {
-    clearScreen();
-    intro(`${chalk.bold("ahub")} ${chalk.dim(`v0.7.2`)}  ${chalk.dim(root)}`);
-  }
-  let showDashboard = true; // render once on entry, then only after a pause
+  if (!options.quietUi) clearScreen();
   do {
     const config = await loadConfig(root);
     const t = translator(config.ui?.language ?? inferLanguage());
-    if (showDashboard) {
-      await renderDashboard(root, config, t, options);
-      showDashboard = false;
-    }
+    if (!options.quietUi) await renderStatusStrip(root, config, t, options);
+    const active = config.models[config.defaults.activeModel];
     const action = await prompts.select(t("controlCenter"), [
-      { name: t("addModelAction"), value: "addModel", description: t("addModelDesc") },
-      { name: t("runAgent"), value: "run", description: t("runAgentDesc") },
-      new Separator("─── ─── ───"),
-      { name: t("agentSettings"), value: "agents", description: t("agentSettingsDesc") },
-      { name: t("modelSettings"), value: "models", description: t("modelSettingsDesc") },
-      { name: t("shortcutSettings"), value: "shortcuts", description: t("shortcutsDesc") },
-      new Separator("─── ─── ───"),
-      { name: t("install"), value: "install", description: t("installDesc") },
-      { name: t("statusDoctor"), value: "status", description: t("statusDesc") },
-      { name: t("language"), value: "language", description: t("languageDesc") },
+      { name: t("runAgent"), value: "run", hint: t("runAgentDesc") },
+      { name: t("addModelAction"), value: "addModel", hint: t("addModelDesc") },
+      { name: t("menuSwitchModel"), value: "active", hint: active ? modelShort(config.defaults.activeModel, active) : t("setActiveModel") },
+      menuSeparator(),
+      { name: t("modelSettings"), value: "models", hint: t("modelSettingsDesc") },
+      { name: t("menuProviders"), value: "providers", hint: t("menuProvidersHint") },
+      { name: t("agentSettings"), value: "agents", hint: t("agentSettingsDesc") },
+      { name: t("shortcutSettings"), value: "shortcuts", hint: t("shortcutsDesc") },
+      menuSeparator(),
+      { name: t("install"), value: "install", hint: t("installDesc") },
+      { name: t("statusDoctor"), value: "status", hint: t("statusDesc") },
+      { name: t("language"), value: "language", hint: t("languageDesc") },
       { name: t("exit"), value: "exit" },
     ]);
     if (action === "exit") { if (!options.quietUi) outro(); return; }
@@ -666,14 +687,14 @@ async function controlCenter(root, options = {}) {
         continue;
       }
       if (action === "addModel") await setupModelFlow(root, prompts, t, options);
-      if (action === "agents") await configure(root, { ...options, prompts, initialAction: "agent" });
-      if (action === "models") await configure(root, { ...options, prompts, initialAction: "models" });
+      if (action === "active") await switchActiveModel(root, prompts, t);
+      if (action === "agents") await configureAgent(root, prompts, t, options);
+      if (action === "models") await configureModels(root, prompts, t, options);
+      if (action === "providers") await configureProviders(root, prompts, t, options);
       if (action === "shortcuts") await configureShortcuts(root, prompts, t);
       if (action === "status") {
         showConfig(root, await loadConfig(root), t, options);
         await pluginStatus(root, t);
-        await pauseForRead(prompts, t); // let the user read before the menu returns
-        showDashboard = true; // refresh state after the pause
       }
       if (action === "install") {
         const status = await getSystemStatus(root);
@@ -729,7 +750,7 @@ async function onboarding(root, config, available, options = {}) {
   const t = translator(language);
   if (!options.quietUi) {
     clearScreen();
-    banner("0.7.2", t("tagline"));
+    header(VERSION, root);
     section(t("quick1"), t("quick1Sub"));
   }
   const choices = [];

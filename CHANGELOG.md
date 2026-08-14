@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.0 — 2026-08-14
+
+- **Menu system rebuilt on @clack/prompts** (inquirer replaced): the prompts now render with the same `◆ │ └` frame as the rest of the UI, Esc = back is native (the raw-keypress AbortController hack is gone), and long lists (models, providers) use clack's filterable autocomplete instead of a threshold-swapped select.
+- **Main menu flattened to one level** (informed by gh CLI / clack / gum conventions): the three frequent actions — Run, Add model, **Switch active model** (new, was 4 levels deep) — sit on top; Model library, Providers (promoted out of the models submenu), Agent settings, and Shortcuts are single entries below. Settings menus are at most two levels deep.
+- **Status strip instead of a static dashboard**: a compact 3-row strip (active model + readiness, agent → CLI routing, provider ●/○) is re-rendered above the menu on *every* loop, so state can never go stale; the `showDashboard` flag and the "back to menu" pause prompt are gone. Action output stays in the scrollback instead of being wiped.
+- **Readability**: menu items are short verb labels; explanations moved to dim per-item hints shown on focus (clack pattern); separator rows group the menu; one vocabulary across all entry points (main menu, `ahub config`, CLI help) — no more "Models / Model library / Manage models" meaning the same thing.
+- Two-key contract preserved and simplified: Esc = back, Ctrl+C = exit (a parallel keypress observer distinguishes the two, both of which clack maps to cancel).
+
 ## 0.7.2 — 2026-08-13
 
 - **Terminal interaction overhaul** (informed by gh CLI, Vercel CLI, and clack research): clack-style `◆`/`└` session framing via chalk (no new dependency); Esc = back one level, Ctrl+C = exit (per Go promptui / gh convention); menu labels trimmed to action names with separator-grouped lists; always-visible minimal key hint (`↑↓ · Enter · Esc`); shared 14-char column width across agents/models/providers; search/filter threshold lowered from >8 to >4 items; bilingual language menu label.

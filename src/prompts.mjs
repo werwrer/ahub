@@ -1,13 +1,8 @@
 import { createInterface } from "node:readline/promises";
-import { createPromptModule } from "inquirer";
+import { isCancel, autocomplete, confirm, multiselect, password, select as clackSelect, text } from "@clack/prompts";
 
-function normalizeError(error) {
-  if (error?.name === "ExitPromptError") throw Object.assign(new Error("exit"), { code: "EXIT" });
-  if (error?.name === "AbortPromptError" || error?.name === "CancelPromptError") {
-    throw Object.assign(new Error("cancelled"), { code: "CANCELLED" });
-  }
-  throw error;
-}
+function exitError() { return Object.assign(new Error("exit"), { code: "EXIT" }); }
+function cancelledError() { return Object.assign(new Error("cancelled"), { code: "CANCELLED" }); }
 
 // Esc navigates back: resolve to the choice that is a back/exit item.
 // Ctrl+C (EXIT code) propagates up to terminate the program.
@@ -19,22 +14,51 @@ function cancelFallback(choices) {
   }
   return undefined;
 }
-async function guardBack(runPromise, choices) {
+
+// Choice normalization shared by every prompt: callers pass {name|label, value, hint|description}
+// (the injected-test shape and the call-site shape stay identical). Separator instances from
+// @inquirer/core are mapped to a disabled dash row so old call sites keep rendering grouped menus.
+function toOption(choice) {
+  if (choice?.type === "separator") {
+    return { label: choice.line ?? choice.name ?? "─".repeat(24), value: Symbol("separator"), disabled: true };
+  }
+  return {
+    label: choice.name ?? choice.label ?? String(choice.value),
+    value: choice.value,
+    ...(choice.hint ?? choice.description ? { hint: choice.hint ?? choice.description } : {}),
+    ...(choice.disabled ? { disabled: true } : {}),
+  };
+}
+
+// clack maps both Escape and Ctrl+C to the same cancel symbol. A parallel keypress observer
+// records which one was pressed so the adapter can keep the two-key contract:
+// Esc = go back (CANCELLED / back-value), Ctrl+C = exit the program (EXIT).
+async function run(factory, choices, input) {
+  let sawCtrlC = false;
+  const onKeypress = (_str, key) => {
+    if (key?.ctrl && key?.name === "c") sawCtrlC = true;
+  };
+  if (input?.on) input.on("keypress", onKeypress);
   try {
-    return await runPromise;
-  } catch (error) {
-    if (error?.code === "EXIT") throw error; // Ctrl+C = exit, never swallow
-    if (error?.code !== "CANCELLED") throw error;
-    const back = cancelFallback(choices);
-    if (back !== undefined) return back;
-    throw error;
+    const result = await factory();
+    if (isCancel(result)) {
+      if (sawCtrlC) throw exitError();
+      const back = cancelFallback(choices ?? []);
+      if (back !== undefined) return back;
+      throw cancelledError();
+    }
+    return result;
+  } finally {
+    if (input?.off) input.off("keypress", onKeypress);
   }
 }
 
-// Always-visible key hints (inquirer renders these as the green help line).
-const NAV_HINT = "↑↓ · Enter · Esc";
-const SEARCH_HINT = "type to filter · ↑↓ · Enter · Esc";
-const instructions = (hint) => ({ navigation: hint, pager: hint });
+// clack validators return undefined for OK; ahub call sites return true (legacy inquirer shape).
+const validator = (validate) => (value) => {
+  if (!validate) return undefined;
+  const result = validate(value);
+  return result === true ? undefined : result;
+};
 
 export function createPrompts(input = process.stdin, output = process.stdout) {
   const terminal = Boolean(input.isTTY && output.isTTY);
@@ -46,66 +70,72 @@ export function createPrompts(input = process.stdin, output = process.stdout) {
       readline.close();
     }
   };
-  const run = async (question) => {
-    // inquirer 12 only throws ExitPromptError on Ctrl+C — it ignores a plain Escape.
-    // Watch the raw keypress stream and abort the prompt on Esc, which surfaces as
-    // AbortPromptError and is normalized to CANCELLED (i.e. "back").
-    // NOTE: inquirer.prompt() ignores a third context argument in this version; the
-    // streams/signal must be wired through createPromptModule(opt) instead.
-    const controller = new AbortController();
-    const onKeypress = (_str, key) => {
-      if (key?.name === "escape" || key?.sequence === "\x1b") controller.abort();
-    };
-    if (input?.on) input.on("keypress", onKeypress);
-    try {
-      const promptModule = createPromptModule({ input, output, signal: controller.signal });
-      return (await promptModule([question], {})).value;
-    } catch (error) {
-      return normalizeError(error);
-    } finally {
-      if (input?.off) input.off("keypress", onKeypress);
-    }
-  };
 
   const ask = (message, options = {}) => terminal
-    ? run({ type: "input", name: "value", message, default: options.default, validate: options.validate })
+    ? run(() => text({
+        message,
+        defaultValue: options.default,
+        placeholder: options.placeholder,
+        validate: validator(options.validate),
+        input, output,
+      }), [], input)
     : askFallback(message);
-  const select = async (message, choices) => {
-    const normalized = choices.map((choice) => choice?.type === "separator" ? choice : { ...choice, name: choice.name ?? choice.label });
-    if (terminal) return guardBack(run({ type: "select", name: "value", message, choices: normalized, pageSize: 12, loop: true, instructions: instructions(NAV_HINT) }), choices);
-    output.write(`\n${message}\n`);
-    choices.forEach((choice, index) => output.write(`  ${index + 1}. ${choice.name ?? choice.label}\n`));
-    while (true) {
-      const answer = await askFallback(`Choose 1-${choices.length}`);
-      const choice = choices[Number(answer) - 1];
-      if (choice) return choice.value;
-      output.write("Please enter one of the listed numbers.\n");
-    }
-  };
-  const search = async (message, choices) => {
-    const normalized = choices.map((choice) => ({ ...choice, name: choice.name ?? choice.label }));
-    if (!terminal || normalized.length <= 4) return select(message, normalized);
-    return guardBack(run({
-      type: "search",
-      name: "value",
-      message,
-      pageSize: 12,
-      instructions: instructions(SEARCH_HINT),
-      source: async (term = "") => {
-        const query = term.trim().toLocaleLowerCase();
-        return query ? normalized.filter((choice) => choice.name.toLocaleLowerCase().includes(query)) : normalized;
-      },
-    }), normalized);
-  };
-  const confirm = (message, initial = true) => terminal
-    ? run({ type: "confirm", name: "value", message, default: initial })
-    : Promise.resolve(initial);
-  const password = (message) => terminal
-    ? run({ type: "password", name: "value", message, mask: "•", validate: (value) => value.trim() ? true : "API key cannot be empty" })
-    : askFallback(message);
-  const checkbox = (message, choices) => terminal
-    ? guardBack(run({ type: "checkbox", name: "value", message, choices: choices.map((choice) => ({ ...choice, name: choice.name ?? choice.label })), loop: true, instructions: "空格 选择 · Enter 确认 · Esc 返回  (Space toggle · Enter confirm · Esc back)", validate: (items) => items.length ? true : "Select at least one option" }), choices)
-    : Promise.resolve(choices.filter((choice) => choice.checked).map((choice) => choice.value));
 
-  return { ask, select, search, confirm, password, checkbox, interactive: terminal };
+  const select = async (message, choices) => {
+    if (!terminal) {
+      output.write(`\n${message}\n`);
+      choices.forEach((choice, index) => output.write(`  ${index + 1}. ${choice.name ?? choice.label}\n`));
+      while (true) {
+        const answer = await askFallback(`Choose 1-${choices.length}`);
+        const choice = choices[Number(answer) - 1];
+        if (choice) return choice.value;
+        output.write("Please enter one of the listed numbers.\n");
+      }
+    }
+    return run(() => clackSelect({
+      message,
+      options: choices.map(toOption),
+      maxItems: 14,
+      input, output,
+    }), choices, input);
+  };
+
+  // Filterable picker for long lists (models, providers). Short lists stay a plain select —
+  // a filter line over four items is noise, not help.
+  const search = async (message, choices) => {
+    if (!terminal || choices.length <= 8) return select(message, choices);
+    return run(() => autocomplete({
+      message,
+      options: choices.map(toOption),
+      maxItems: 12,
+      input, output,
+    }), choices, input);
+  };
+
+  const confirmPrompt = (message, initial = true) => terminal
+    ? run(() => confirm({ message, initialValue: initial, input, output }), [], input)
+    : Promise.resolve(initial);
+
+  const askPassword = (message) => terminal
+    ? run(() => password({
+        message,
+        validate: validator((value) => value.trim() ? true : "API key cannot be empty"),
+        input, output,
+      }), [], input)
+    : askFallback(message);
+
+  const checkbox = async (message, choices) => {
+    if (!terminal) return choices.filter((choice) => choice.checked).map((choice) => choice.value);
+    const options = choices.map(toOption);
+    const picked = await run(() => multiselect({
+      message,
+      options,
+      initialValues: choices.filter((choice) => choice.checked).map((choice) => choice.value),
+      required: true,
+      input, output,
+    }), choices, input);
+    return picked;
+  };
+
+  return { ask, select, search, confirm: confirmPrompt, password: askPassword, checkbox, interactive: terminal };
 }
